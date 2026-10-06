@@ -1,0 +1,5 @@
+# Run on the PUBLIC server. Replace the hostname with your real domain.
+# Point its DNS A/AAAA records at that server and allow inbound TCP 80/443.
+speech.example.com {
+    reverse_proxy 127.0.0.1:17860
+}

@@ -1,0 +1,16 @@
+# Replace account/project paths, then install in /etc/systemd/system/.
+[Unit]
+Description=Speech Translation Demo
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=demo
+WorkingDirectory=/srv/speech-translation-demo
+ExecStart=/bin/bash /srv/speech-translation-demo/scripts/run/serve_local.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

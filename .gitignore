@@ -1,0 +1,97 @@
+# Legacy site-specific jobs remain local; portable launchers are published.
+/scripts/slurm/serve_demo.sh
+/scripts/slurm/test_*.sh
+/README_prev.md
+# Model test scripts/results.
+/test/
+/tests/
+# Only sample MP3 files and their reference text are published from this directory.
+/data/test_samples/*
+
+# Model weights and downloads (prepare locally; do not upload to GitHub).
+/ckpts/
+*.safetensors
+*.pt
+*.pth
+*.onnx
+*.bin
+
+# Gradio/Hugging Face caches, recordings and generated results.
+.cache/
+.gradio/
+.huggingface/
+/outs/
+/outputs/
+/uploads/
+/recordings/
+/logs/
+*.log
+slurm-*.out
+slurm-*.err
+*.pid
+*.sock
+*.wav
+*.mp3
+*.flac
+*.ogg
+*.m4a
+*.aac
+*.opus
+*.webm
+
+# Keep bundled demo audio; these exceptions must follow the general audio rules.
+!/data/test_samples/*.mp3
+!/data/test_samples/references.csv
+
+# Private configuration and credentials. Only sanitized example files are public.
+.env
+.env.*
+!.env.example
+*.local
+*.local.*
+*.private
+*.private.*
+.ssh/
+secrets/
+credentials/
+credentials.json
+service-account*.json
+id_rsa*
+id_dsa*
+id_ecdsa*
+id_ed25519*
+known_hosts*
+authorized_keys*
+*.key
+*.pem
+*.p12
+*.pfx
+
+# Python bytecode, environments, test/tool caches and build output.
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.venv/
+venv/
+env/
+*.egg-info/
+build/
+dist/
+
+# Editor, OS and local agent files.
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.codex/
+.agents/

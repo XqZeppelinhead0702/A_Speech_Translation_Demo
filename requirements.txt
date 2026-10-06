@@ -1,0 +1,7 @@
+# Python 3.10+; install matching CUDA torch/torchaudio wheels separately (README).
+# Versions match the existing st_demo environment.
+gradio==6.29.1
+transformers==5.18.0
+numpy==2.2.6
+soundfile==0.14.0
+sentencepiece==0.2.2
