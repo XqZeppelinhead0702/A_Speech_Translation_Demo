@@ -35,6 +35,11 @@ DEMO_CONDA_ENV=st_demo
 | 变量 | 默认值 | 作用 |
 | --- | --- | --- |
 | `DEMO_MODEL_DIR` | 项目下 `ckpts/seamless-m4t-v2-large` | 本地完整模型目录 |
+| `DEMO_LID_BACKEND` | `mms` | `mms`：GPU MMS-LID-256；`speechbrain`：原来的 CPU 检测器 |
+| `DEMO_LID_MODEL_DIR` | 根据模块选择 | `mms` 为 `ckpts/mms-lid-256`，`speechbrain` 为 `ckpts/lang-id-voxlingua107-ecapa` |
+| `DEMO_LID_PRECISION` | `float32` | MMS 检测精度：`float32` / `float16` / `bfloat16`；与翻译精度独立，SpeechBrain 不使用此项 |
+| `DEMO_LID_MAX_SECONDS` | `10` | 检测片段的时长上限，至少 1 秒 |
+| `DEMO_LID_MIN_CONFIDENCE` | `0.5` | 置信度低于此值时提示手动选择，范围 0–1 |
 | `DEMO_PYTHON` | `python` | 运行程序的 Python |
 | `DEMO_PORT` | `7860` | Gradio 后端端口 |
 | `DEMO_HOST` | 脚本 `127.0.0.1` | 仅本地后端脚本可调整；其他模式固定回环地址 |
@@ -55,6 +60,8 @@ sbatch --partition=GPU_PARTITION scripts/slurm/serve_direct.sh --max-seconds 30 
 ```
 
 包装脚本会让 `--port` 同时作用于模型网页和 SSH 转发目标；固定域名代理的后端端口仍需同步修改。更多应用参数用 `python app.py --help` 查看，此操作不会加载模型。
+
+检测配置也可使用 `--lid-backend`、`--lid-model-dir`、`--lid-precision`、`--lid-max-seconds`、`--lid-min-confidence` 参数。默认 MMS 和翻译模型共享第一张可见 GPU，只需一张 GPU；切换到 SpeechBrain 时检测在 CPU 上运行。Slurm 启动脚本默认按分配核数设置 `OMP_NUM_THREADS` 和 `MKL_NUM_THREADS`，也可在本地配置中设置更小的值。默认申请 4 个 CPU 和 32 GB 主机内存，调整方法见 [Slurm 资源配置](deploy_slurm.md#cpu-与内存资源)。检测细节见[自动语言检测](language_detection.md)。
 
 ## 登录节点中转
 

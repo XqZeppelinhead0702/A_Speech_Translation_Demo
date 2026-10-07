@@ -11,7 +11,40 @@
 3. 执行 `mkdir -p outs`，日志目录必须在提交前存在。
 4. 确认 GPU 分区、CPU/内存和时限；将下文 `GPU_PARTITION` 替换为实际分区。
 
-新脚本不写死集群模块、账号、分区或共享目录。默认一节点、一 GPU，资源参数可以在提交时添加，如 `--cpus-per-task=4 --mem=32G --time=02:00:00`，以所在集群要求为准。
+新脚本不写死集群模块、账号、分区或共享目录。默认申请一节点、一任务、一 GPU、4 个 CPU 和每节点 32 GB 主机内存；时限等参数以所在集群要求为准。
+
+## CPU 与内存资源
+
+三个公开 Slurm 启动脚本已包含：
+
+```bash
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=32G
+```
+
+默认 MMS-LID-256 与 SeamlessM4T 同时常驻第一张可见 GPU，检测和翻译按顺序执行，只申请一张 GPU；切回 SpeechBrain 时检测器常驻 CPU。加载权重、音频解码和网页服务也使用主机内存。32 GB 是整个服务的初始预算，不代表语言检测模型单独需要这么多。`--mem` 申请的是每节点的主机内存，GPU 显存由所分配 GPU 决定。[Slurm 资源参数说明](https://slurm.schedmd.com/sbatch.html)
+
+选择 L20 48 GB 等大显存 GPU 时，按集群规则指定对应分区或 GPU 类型。MMS 默认 float32、SeamlessM4T 默认 float16；检测最多使用 10 秒片段。当前未运行双模型 GPU 推理测量峰值，实际显存还包含中间计算与缓存，需以 Slurm 作业运行结果为准。检测模块与精度调整见[自动语言检测](language_detection.md)。
+
+启动脚本默认将 `OMP_NUM_THREADS`、`MKL_NUM_THREADS` 设为分配的 CPU 数，避免 CPU 推理默认开启大量线程；如需更少线程，可在 `.env.local` 中设置这两个变量，值不要超过分配核数。单实例仍按队列依次推理。
+
+如果需要更多内存，可在提交时覆盖脚本默认值，例如登录节点中转模式：
+
+```bash
+sbatch --partition=GPU_PARTITION --mem=48G --cpus-per-task=4 scripts/slurm/serve_login_relay.sh
+```
+
+修改脚本不会改变正在运行的作业，需停止旧作业后重新提交。运行后可检查分配和实际内存峰值：
+
+```bash
+scontrol show job JOB_ID
+sstat -j JOB_ID.batch --format=JobID,MaxRSS,AveRSS
+# 已结束的作业：
+sacct -j JOB_ID --format=JobID,State,ReqMem,MaxRSS
+```
+
+`JOB_ID` 替换为作业号；实际统计取决于集群是否启用了相应作业记账。当前没有运行 GPU 服务测量整个 Demo 的内存峰值，后续可按实际峰值调整预算。
 
 ## A. 计算节点可联网：直接分享
 

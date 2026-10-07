@@ -14,6 +14,7 @@
 | torch / torchaudio | 2.6.0，CUDA 12.4 wheel |
 | Gradio | 6.29.1 |
 | Transformers | 5.18.0 |
+| SpeechBrain / HyperPyYAML | 1.0.3 / 1.2.3 |
 | numpy / soundfile / sentencepiece | 以 `requirements.txt` 为准 |
 
 先进入项目根目录，准备环境：
@@ -58,6 +59,8 @@ DOWNLOAD_MODEL
 
 模型信息和使用许可见[官方模型卡](https://huggingface.co/facebook/seamless-m4t-v2-large)。
 
+默认还需要准备本地 `ckpts/mms-lid-256/`，包含 `config.json`、`preprocessor_config.json` 和分类模型权重；通过现有 Transformers 依赖加载，常驻与翻译模型相同的 GPU。原来的 `ckpts/lang-id-voxlingua107-ecapa/` 保留，用 `--lid-backend speechbrain` 可切回 CPU 检测。配置与离线准备步骤见[自动语言检测](language_detection.md)。
+
 ## 示例音频
 
 示例 MP3 和 `references.csv` 已在 `data/test_samples/` 中提供，使用 Demo 无需再次下载。页面使用以下三段：
@@ -65,10 +68,10 @@ DOWNLOAD_MODEL
 | 文件 | 输入语言 | 输出语言 |
 | --- | --- | --- |
 | `zh-CN_en_04.mp3` | 中文普通话 | 英语 |
-| `en_zh-CN_02.mp3` | 英语 | 中文普通话 |
+| `en_zh-CN_01.mp3` | 英语 | 中文普通话 |
 | `fr_en_04.mp3` | 法语 | 英语 |
 
-点击示例只填入输入，不会启动时预先推理。参考文本不作为模型结果显示。若需要重新获取数据，可选执行：
+示例输入语言均设为“自动检测”。点击示例只填入输入，不会启动时预先推理。参考文本不作为模型结果显示。若需要重新获取数据，可选执行：
 
 ```bash
 python -m pip install datasets
@@ -85,8 +88,9 @@ cd ..
 
 对同一段音频：
 
-1. 设置 `tgt_lang` 为输入语言，生成原文识别文本。
-2. 设置 `tgt_lang` 为目标语言，独立生成翻译文本。
-3. 两种语言相同时复用原文结果。
+1. 自动模式中先由所选 MMS / SpeechBrain 模块检测语言并映射为 SeamlessM4T 语言代码；手动模式跳过检测推理。
+2. 设置 `tgt_lang` 为输入语言，生成原文识别文本。
+3. 设置 `tgt_lang` 为目标语言，独立生成翻译文本。
+4. 两种语言相同时复用原文结果。
 
 两次调用均使用 `generate_speech=False`；本项目不生成翻译语音。音频编码器没有用于强制源语音语言的 `src_lang` 参数，输入语言选项用于指定原文识别输出的语言/文字。[官方用法](https://huggingface.co/docs/transformers/en/model_doc/seamless_m4t_v2)

@@ -44,6 +44,9 @@ import gradio as gr
 import numpy as np
 import soundfile as sf
 
+from language_detection import BACKENDS, DEFAULT_BACKEND, DEFAULT_MMS_MODEL_DIR as DEFAULT_LID_MODEL_DIR
+from language_detection import LanguageDetectionError, create_language_detector, default_model_dir
+
 SAMPLE_DIR = PROJECT_DIR / "data" / "test_samples"
 LANGUAGES = [
     ("中文（普通话）", "cmn"), ("中文（繁体输出）", "cmn_Hant"),
@@ -57,10 +60,12 @@ LANGUAGES = [
     ("荷兰语", "nld"), ("波兰语", "pol"), ("乌克兰语", "ukr"),
 ]
 LANGUAGE_CODES = {code for _, code in LANGUAGES}
+LANGUAGE_NAMES = {code: name.split(" · ")[0] for name, code in LANGUAGES}
+AUTO_LANGUAGE = "auto"
 EXAMPLES = [
-    [str(SAMPLE_DIR / "zh-CN_en_04.mp3"), "cmn", "eng"],
-    [str(SAMPLE_DIR / "en_zh-CN_02.mp3"), "eng", "cmn"],
-    [str(SAMPLE_DIR / "fr_en_04.mp3"), "fra", "eng"],
+    [str(SAMPLE_DIR / "zh-CN_en_04.mp3"), AUTO_LANGUAGE, "eng"],
+    [str(SAMPLE_DIR / "en_zh-CN_01.mp3"), AUTO_LANGUAGE, "cmn"],
+    [str(SAMPLE_DIR / "fr_en_04.mp3"), AUTO_LANGUAGE, "eng"],
 ]
 CSS = """
 .gradio-container {max-width: 1080px !important; margin: auto !important;}
@@ -73,7 +78,8 @@ LOGGER = logging.getLogger(__name__)
 def read_audio(audio_path: str | None, max_seconds: float) -> tuple[np.ndarray, int]:
     """Decode a bounded clip, validating it before allocating any GPU memory."""
     if not audio_path:
-        raise gr.Error("请先上传音频，或使用麦克风录制一段语音。")
+        LOGGER.warning("Audio submission rejected: empty input; recording/upload may be unfinished")
+        raise gr.Error("尚未收到音频。录音后请先点击停止，等待“音频已就绪”后再提交；上传失败时请重新录音或上传文件。")
     try:
         with sf.SoundFile(audio_path) as stream:
             if stream.samplerate <= 0 or stream.frames <= 0:
@@ -109,13 +115,22 @@ def decode_output(processor, output) -> str:
 
 
 class SpeechTranslator:
-    def __init__(self, model_dir: Path, precision: str, max_seconds: float, max_tokens: int):
+    def __init__(
+        self, model_dir: Path, precision: str, max_seconds: float, max_tokens: int,
+        lid_model_dir: Path | None = None, lid_max_seconds: float = 10,
+        lid_min_confidence: float = 0.5, lid_backend: str = DEFAULT_BACKEND,
+        lid_precision: str = "float32",
+    ):
         self.model_dir = model_dir
         self.precision = precision
         self.max_seconds = max_seconds
         self.max_tokens = max_tokens
         self.processor = None
         self.model = None
+        if not np.isfinite(lid_min_confidence) or not 0 <= lid_min_confidence <= 1:
+            raise ValueError("语言检测置信度阈值必须在 0–1 之间。")
+        self.language_detector = create_language_detector(lid_backend, lid_model_dir, lid_max_seconds, lid_precision)
+        self.lid_min_confidence = lid_min_confidence
         self.lock = threading.Lock()
 
     def load_model(self):
@@ -140,7 +155,7 @@ class SpeechTranslator:
         LOGGER.info("Model ready on %s", torch.cuda.get_device_name(0))
 
     def translate(self, audio_path: str | None, src_lang: str, tgt_lang: str):
-        if src_lang not in LANGUAGE_CODES or tgt_lang not in LANGUAGE_CODES:
+        if src_lang not in LANGUAGE_CODES | {AUTO_LANGUAGE} or tgt_lang not in LANGUAGE_CODES:
             raise gr.Error("请选择有效的输入语言和输出语言。")
         audio, sample_rate = read_audio(audio_path, self.max_seconds)
         import torch
@@ -150,10 +165,30 @@ class SpeechTranslator:
         # Also protects the model's mutable modality and tokenizer outside Gradio.
         with self.lock:
             try:
-                self.load_model()
                 waveform = torch.from_numpy(audio)
                 if sample_rate != 16_000:
                     waveform = torchaudio.functional.resample(waveform, sample_rate, 16_000)
+                detection_elapsed = None
+                if src_lang == AUTO_LANGUAGE:
+                    prediction = self.language_detector.detect(waveform.numpy())
+                    detected_code = self.language_detector.to_seamless_code(prediction.code)
+                    if prediction.confidence < self.lid_min_confidence:
+                        detected_name = LANGUAGE_NAMES[detected_code] if detected_code else prediction.label
+                        raise gr.Error(
+                            f"可能是{detected_name}，但检测置信度仅为 "
+                            f"{prediction.confidence:.1%}，请手动选择输入语言或提供更清晰的音频。"
+                        )
+                    if detected_code is None:
+                        raise gr.Error(
+                            f"检测到 {prediction.label}，当前 Demo 未提供该语言的自动识别映射。"
+                            "请手动确认输入语言后重试。"
+                        )
+                    src_lang = detected_code
+                    language_result = f"自动检测（{self.language_detector.display_name}）：{LANGUAGE_NAMES[src_lang]} · 置信度 {prediction.confidence:.1%}"
+                    detection_elapsed = prediction.elapsed
+                else:
+                    language_result = f"手动指定：{LANGUAGE_NAMES[src_lang]}"
+                self.load_model()
                 inputs = self.processor(
                     audio=waveform.numpy(), sampling_rate=16_000, return_tensors="pt",
                 )
@@ -179,7 +214,14 @@ class SpeechTranslator:
                             **inputs, tgt_lang=tgt_lang, generate_speech=False,
                             text_max_new_tokens=self.max_tokens, text_do_sample=False,
                         ))
-                return transcript, translation, f"完成 · 音频 {len(audio) / sample_rate:.1f} 秒 · 用时 {time.monotonic() - started:.1f} 秒"
+                status = f"完成 · 音频 {len(audio) / sample_rate:.1f} 秒 · 用时 {time.monotonic() - started:.1f} 秒"
+                if detection_elapsed is not None:
+                    status += f"（语言检测 {detection_elapsed:.2f} 秒）"
+                return transcript, translation, language_result, status
+            except gr.Error:
+                raise
+            except LanguageDetectionError as exc:
+                raise gr.Error(str(exc)) from exc
             except torch.cuda.OutOfMemoryError as exc:
                 LOGGER.exception("CUDA out of memory")
                 torch.cuda.empty_cache()
@@ -192,7 +234,7 @@ class SpeechTranslator:
 def build_demo(translator: SpeechTranslator) -> gr.Blocks:
     with gr.Blocks(title="语音识别与翻译", analytics_enabled=False, delete_cache=(3600, 3600)) as demo:
         gr.Markdown(
-            "# 语音识别与翻译\n上传音频或录制语音，选择语言，一键查看原文和译文。",
+            "# 语音识别与翻译\n上传音频或录制语音，自动检测输入语言，选择目标语言即可查看原文和译文。",
             elem_id="intro",
         )
         with gr.Row():
@@ -202,36 +244,82 @@ def build_demo(translator: SpeechTranslator) -> gr.Blocks:
                     label="上传音频 / 麦克风录音", editable=False,
                 )
                 with gr.Row():
-                    source = gr.Dropdown(LANGUAGES, value="cmn", label="输入语言")
+                    source = gr.Dropdown([("自动检测", AUTO_LANGUAGE), *LANGUAGES], value=AUTO_LANGUAGE, label="输入语言")
                     target = gr.Dropdown(LANGUAGES, value="eng", label="输出语言")
-                gr.Markdown(f"请选择音频实际使用的语言；最长 {translator.max_seconds:g} 秒。麦克风录音需要 HTTPS 和浏览器授权。")
+                gr.Markdown(f"输入语言默认自动检测，也可手动选择；检测不准时请手动确认。最长 {translator.max_seconds:g} 秒。录音后请先停止，等待“音频已就绪”再提交。麦克风录音需要 HTTPS 和浏览器授权。")
                 with gr.Row():
-                    submit = gr.Button("识别并翻译", variant="primary")
+                    submit = gr.Button("识别并翻译", variant="primary", interactive=False)
                     clear = gr.Button("清空")
             with gr.Column(scale=1):
+                language_result = gr.Textbox(label="输入语言识别", value="等待检测", interactive=False)
                 transcript = gr.Textbox(label="原文识别", lines=5, interactive=False)
                 translation = gr.Textbox(label="翻译结果", lines=5, interactive=False)
                 status = gr.Textbox(label="状态", value="等待输入音频", interactive=False)
         examples = [example for example in EXAMPLES if Path(example[0]).is_file()]
+        controls = [submit, clear, audio, source, target]
         if examples:
-            gr.Examples(
+            example_widget = gr.Examples(
                 examples=examples, inputs=[audio, source, target],
                 label="试试示例（点击填入后，再点击“识别并翻译”）",
                 cache_examples=False,
             )
-        submit.click(
-            translator.translate, inputs=[audio, source, target],
-            outputs=[transcript, translation, status],
-            concurrency_limit=1, concurrency_id="speech-model", api_name="translate",
+            controls.append(example_widget.dataset)
+        # Run readiness/control updates in the browser. A local recording preview
+        # can appear before its upload completes; server-side change callbacks also
+        # arrive late through a tunnel. Never reuse an earlier recording as fallback.
+        audio.change(
+            fn=None, inputs=[audio], outputs=[submit, transcript, translation, language_result, status],
+            js="""(clip) => {
+                const ready = Boolean(clip && clip.path);
+                return [{__type__: "update", interactive: ready}, "", "", "等待检测",
+                    ready ? "音频已就绪 · 可以识别并翻译" : "等待音频 · 录音后请先停止并等待上传完成"];
+            }""",
+            queue=False,
         )
-        # Clear previous results when the selected clip or languages change.
-        for component in (audio, source, target):
+        audio.start_recording(
+            fn=None, outputs=[submit, transcript, translation, language_result, status],
+            js="""() => [{__type__: "update", interactive: false}, "", "", "等待检测",
+                "正在录音 · 请先停止，等待音频上传完成"]""",
+            queue=False,
+        )
+        # This first step has no HTTP round trip. Lock this tab's inputs before
+        # capturing the request for the existing serial inference queue.
+        submission = submit.click(
+            fn=None, inputs=[audio], outputs=[*controls, status],
+            js=f"""(clip) => {{
+                if (!clip || !clip.path) throw new Error("音频尚未就绪，请先停止录音并等待上传完成。");
+                return [...Array.from({{length: {len(controls)}}}, () => ({{__type__: "update", interactive: false}})),
+                    "排队或处理中 · 请稍候"];
+            }}""",
+            queue=False, trigger_mode="once",
+        )
+        inference = submission.success(
+            translator.translate, inputs=[audio, source, target],
+            outputs=[transcript, translation, language_result, status],
+            concurrency_limit=1, concurrency_id="speech-model", api_name="translate",
+            trigger_mode="once",
+        )
+        inference.failure(
+            fn=None, outputs=[status], queue=False,
+            js='() => ["处理未完成 · 请查看错误提示，调整输入后重试"]',
+        )
+        # .then also runs on errors, so a failed detection cannot strand controls.
+        inference.then(
+            fn=None, inputs=[audio], outputs=controls, queue=False,
+            js=f"""(clip) => Array.from({{length: {len(controls)}}}, (_, index) =>
+                ({{__type__: "update", interactive: index === 0 ? Boolean(clip && clip.path) : true}}))""",
+        )
+        for component in (source, target):
             component.change(
-                lambda: ("", "", "等待识别"), outputs=[transcript, translation, status], queue=False,
+                fn=None, inputs=[audio],
+                outputs=[transcript, translation, language_result, status], queue=False,
+                js="""(clip) => ["", "", "等待检测", clip && clip.path
+                    ? "音频已就绪 · 可以识别并翻译" : "等待音频 · 录音后请先停止并等待上传完成"]""",
             )
         clear.click(
-            lambda: (None, "", "", "等待输入音频"),
-            outputs=[audio, transcript, translation, status], queue=False,
+            fn=None, outputs=[audio, source, transcript, translation, language_result, status, submit],
+            js='() => [null, "auto", "", "", "等待检测", "等待输入音频", {__type__: "update", interactive: false}]',
+            queue=False,
         )
     return demo.queue(max_size=16, default_concurrency_limit=1)
 
@@ -271,12 +359,27 @@ def parse_args(argv=None):
     parser.add_argument("--precision", choices=["float16", "bfloat16", "float32"], default=os.getenv("DEMO_PRECISION", "float16"))
     parser.add_argument("--max-seconds", type=float, default=float(os.getenv("DEMO_MAX_SECONDS", "60")))
     parser.add_argument("--max-new-tokens", type=int, default=256)
+    parser.add_argument("--lid-backend", choices=BACKENDS, default=os.getenv("DEMO_LID_BACKEND", DEFAULT_BACKEND))
+    parser.add_argument("--lid-model-dir", type=Path, default=Path(os.environ["DEMO_LID_MODEL_DIR"]) if os.getenv("DEMO_LID_MODEL_DIR") else None)
+    parser.add_argument("--lid-precision", choices=["float16", "bfloat16", "float32"], default=os.getenv("DEMO_LID_PRECISION", "float32"))
+    parser.add_argument("--lid-max-seconds", type=float, default=float(os.getenv("DEMO_LID_MAX_SECONDS", "10")))
+    parser.add_argument("--lid-min-confidence", type=float, default=float(os.getenv("DEMO_LID_MIN_CONFIDENCE", "0.5")))
     parser.add_argument("--startup-timeout", type=int, default=int(os.getenv("DEMO_STARTUP_TIMEOUT", "90")))
     args = parser.parse_args(argv)
+    if args.lid_backend not in BACKENDS:
+        parser.error("语言检测模块必须为 mms 或 speechbrain。")
+    if args.lid_precision not in {"float16", "bfloat16", "float32"}:
+        parser.error("MMS 检测精度必须为 float16、bfloat16 或 float32。")
+    if args.lid_model_dir is None:
+        args.lid_model_dir = default_model_dir(args.lid_backend)
     if args.precision not in {"float16", "bfloat16", "float32"}:
         parser.error("精度必须为 float16、bfloat16 或 float32。")
     if args.startup_timeout <= 0:
         parser.error("启动超时秒数必须大于 0。")
+    if not np.isfinite(args.lid_max_seconds) or args.lid_max_seconds < 1:
+        parser.error("语言检测片段长度必须至少为 1 秒。")
+    if not np.isfinite(args.lid_min_confidence) or not 0 <= args.lid_min_confidence <= 1:
+        parser.error("语言检测置信度阈值必须在 0–1 之间。")
     if not 1 <= args.port <= 65535 or not np.isfinite(args.max_seconds) or args.max_seconds <= 0 or args.max_new_tokens <= 0:
         parser.error("端口必须在 1–65535 之间，音频时长和最大 token 数必须大于 0。")
     return args
@@ -295,9 +398,15 @@ def main():
     username, password = os.getenv("DEMO_AUTH_USER"), os.getenv("DEMO_AUTH_PASSWORD")
     if bool(username) != bool(password):
         raise RuntimeError("DEMO_AUTH_USER 和 DEMO_AUTH_PASSWORD 必须同时设置。")
-    translator = SpeechTranslator(args.model_dir.resolve(), args.precision, args.max_seconds, args.max_new_tokens)
+    translator = SpeechTranslator(
+        args.model_dir.resolve(), args.precision, args.max_seconds, args.max_new_tokens,
+        args.lid_model_dir, args.lid_max_seconds, args.lid_min_confidence,
+        args.lid_backend, args.lid_precision,
+    )
     demo = build_demo(translator)
     try:
+        LOGGER.info("语言检测模块：%s", translator.language_detector.display_name)
+        translator.language_detector.load_model()
         translator.load_model()
         print("正在启动界面，请等待公网入口打印 PUBLIC_URL；本地监听地址不能用于公网访问。", flush=True)
         with startup_deadline(args.startup_timeout):
@@ -305,7 +414,7 @@ def main():
                 server_name=args.host, server_port=args.port, share=args.share,
                 root_path=args.root_path or None, auth=(username, password) if username else None,
                 allowed_paths=[example[0] for example in EXAMPLES if Path(example[0]).is_file()],
-                blocked_paths=[str(args.model_dir.resolve()), str(PROJECT_DIR / "ckpts"), str(PROJECT_DIR / "outs")],
+                blocked_paths=[str(args.model_dir.resolve()), str(args.lid_model_dir.resolve()), str(PROJECT_DIR / "ckpts"), str(PROJECT_DIR / "outs")],
                 max_file_size="25mb", show_error=False, inbrowser=False,
                 theme=gr.themes.Soft(primary_hue="blue"), css=CSS,
                 prevent_thread_lock=True,

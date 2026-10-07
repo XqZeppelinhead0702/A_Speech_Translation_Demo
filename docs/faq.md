@@ -2,6 +2,22 @@
 
 [返回 README](../README.md)
 
+## 录音后提示没有音频，或重复点击导致状态混乱
+
+麦克风录音要先点击停止，再等状态显示“音频已就绪”后点击“识别并翻译”。本地出现波形不一定代表录音已传到服务器；公网中转较慢时，音频编码、上传可能还在进行。[Gradio 录音上传流程](https://github.com/gradio-app/gradio/blob/main/js/audio/interactive/InteractiveAudio.svelte)
+
+页面在音频值准备好之前禁用提交，录音开始时重新禁用；排队和处理期间会禁用当前页面的提交、清空、输入切换及示例，完成或出错后恢复。就绪提示和控件切换在浏览器执行，不额外等待服务器请求。其他用户仍使用各自的音频，模型推理仍串行执行，队列最多 16 个请求。
+
+如果一直没有就绪提示，检查麦克风授权和网络连接，再重新录音或上传文件；不要只反复点击按钮。服务重启后旧页面可能持有失效的缓存引用，需要刷新并重新输入。程序不会用上一段音频代替空输入，避免无意中翻译旧录音。
+
+## 自动语言检测不正确或提示置信度不足
+
+输入下拉框保留手动选择，可改为音频实际语言后重试；手动模式不执行检测推理。短音频、口音、背景噪声和多语言混说可能造成误判，高置信度也不代表一定正确。默认 MMS 含粤语类别；切回 SpeechBrain 后，粤语需手动指定。普通话自动识别默认使用简体原文。检测至少需要 1 秒有效音频，建议提供更长、清晰的单语片段。配置、置信度阈值及检测过程见[自动语言检测](language_detection.md)。
+
+## 缺少语言检测模型或依赖
+
+先确认当前 `DEMO_LID_BACKEND`：默认 `mms` 需要 `ckpts/mms-lid-256/` 中的 `config.json`、`preprocessor_config.json` 和分类权重；`speechbrain` 需要 `ckpts/lang-id-voxlingua107-ecapa/` 中的 `hyperparams.yaml`、`embedding_model.ckpt`、`classifier.ckpt`、`label_encoder.txt`。服务实际使用的 Python 环境需安装 `requirements.txt`。其他位置通过 `DEMO_LID_MODEL_DIR` 或 `--lid-model-dir` 指定，切换模块时必须匹配目录；已有配置若固定了 SpeechBrain 路径，使用默认 MMS 前需删除或修改该路径设置。程序只读取本地权重，不会在无法联网的计算节点自动下载。
+
 ## 只显示 `Running on local URL: http://0.0.0.0:7860`，怎么从外部访问？
 
 这是监听信息，不是公网地址。临时分享应等待实际 `PUBLIC_URL=https://….gradio.live`；登录节点中转模式中的 URL 由登录节点进程打印。固定域名模式不生成 Gradio URL，应访问自己配置的 HTTPS 域名。完整过程见[网络说明](network.md)。
@@ -87,7 +103,7 @@ rm -rf -- .cache/gradio
 ## 如何在不运行 GPU 模型的情况下检查？
 
 ```bash
-python -m py_compile app.py scripts/check_public_access.py scripts/login_relay.py
+python -m py_compile app.py language_detection.py scripts/check_public_access.py scripts/login_relay.py
 bash -n scripts/run/serve.sh
 python app.py --help
 ```

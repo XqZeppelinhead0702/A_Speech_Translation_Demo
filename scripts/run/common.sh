@@ -30,6 +30,11 @@ export DEMO_PYTHON="${DEMO_PYTHON:-python}"
 command -v "$DEMO_PYTHON" >/dev/null || { echo "找不到配置的 Python。" >&2; exit 1; }
 if [[ -n "${DEMO_FFMPEG_DIR:-}" ]]; then export PATH="$DEMO_FFMPEG_DIR:$PATH"; fi
 export PYTHONUNBUFFERED=1 GRADIO_ANALYTICS_ENABLED=False
+# Bound default CPU worker pools to the Slurm allocation before importing Torch.
+if [[ -n "${SLURM_JOB_ID:-}" ]]; then
+    export OMP_NUM_THREADS="${OMP_NUM_THREADS:-${SLURM_CPUS_PER_TASK:-1}}"
+    export MKL_NUM_THREADS="${MKL_NUM_THREADS:-$OMP_NUM_THREADS}"
+fi
 export NO_PROXY="localhost,127.0.0.1,0.0.0.0,::1${NO_PROXY:+,$NO_PROXY}${no_proxy:+,$no_proxy}"
 export no_proxy="$NO_PROXY"
 case "${DEMO_PROXY_MODE:-inherit}" in
