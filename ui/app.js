@@ -8,6 +8,9 @@
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
   const $ = (selector) => document.querySelector(selector);
   const still = () => reducedMotion.matches;
+  // Palette preview: ?palette=sage or ?palette=dusk swaps the colour tokens (style.css).
+  const palette = new URLSearchParams(location.search).get("palette");
+  if (palette && /^[a-z]+$/.test(palette)) root.dataset.stPalette = palette;
 
   let state = null;
   let prevState = "idle";
@@ -214,7 +217,7 @@
   }
 
   // ---- Voice line --------------------------------------------------------------
-  // One ink, two strokes. Silence is a still hairline. Speech bends it, shaped by the
+  // One accent, two strokes. Silence is a still hairline. Speech bends it, shaped by the
   // live voice bands. A finished recording settles into its own loudness profile, the
   // system reads across it while processing, and playback fills it in.
   const spring = (current, target, up, down) => current + (target - current) * (target > current ? up : down);
@@ -226,11 +229,13 @@
   let lastKey = "";
   let colors = null;
   let colorsAt = 0;
+  let probe = null;
   function readColors(el, now) {
     if (colors && now - colorsAt < 600) return colors;
-    const style = getComputedStyle(el);
-    const get = (name) => style.getPropertyValue(name).trim();
-    colors = { ink: get("--st-ink"), ink3: get("--st-ink-3"), ink4: get("--st-ink-4") };
+    // Resolve the tokens through a probe so the canvas gets plain computed colours.
+    if (!probe || !probe.isConnected) { probe = document.createElement("i"); el.parentElement.appendChild(probe); }
+    const get = (name) => { probe.style.color = `var(${name})`; return getComputedStyle(probe).color; };
+    colors = { accent: get("--st-accent"), ink: get("--st-accent-deep"), ink4: get("--st-ink-4") };
     colorsAt = now;
     return colors;
   }
@@ -240,10 +245,11 @@
     const mid = h / 2;
     const left = w * 0.04;
     const span = w * 0.92;
-    const strokes = [{ scale: 1, shift: 0, width: 1.5, opacity: 1 }, { scale: 0.62, shift: 1.9, width: 1, opacity: 0.28 }];
+    const strokes = [{ scale: 0.62, shift: 1.9, width: 1, opacity: 0.32 }, { scale: 1, shift: 0, width: 1.6, opacity: 1, fill: true }];
     for (const stroke of strokes) {
       ctx.globalAlpha = alpha * stroke.opacity;
       ctx.strokeStyle = color;
+      ctx.fillStyle = color;
       ctx.lineWidth = stroke.width * dpr;
       ctx.beginPath();
       const steps = 160;
@@ -257,6 +263,14 @@
         s === 0 ? ctx.moveTo(left, mid - y) : ctx.lineTo(left + u * span, mid - y);
       }
       ctx.stroke();
+      if (stroke.fill) {
+        // A faint wash between the line and its baseline gives the voice some body.
+        ctx.lineTo(left + span, mid);
+        ctx.lineTo(left, mid);
+        ctx.closePath();
+        ctx.globalAlpha = alpha * 0.08;
+        ctx.fill();
+      }
     }
     ctx.globalAlpha = 1;
   }
@@ -282,14 +296,13 @@
       const u = i / (count - 1);
       const peak = peaks[Math.min(peaks.length - 1, Math.floor(u * peaks.length))];
       const height = Math.max(0.75 * dpr, peak * mid * 0.72 * mix);
-      let ink = state === "processing" ? 0.0 : 0.55;
+      // Resting bars sit at a soft accent; played and freshly read bars come to full.
+      let ink = state === "processing" && !still() ? 0.22 : state === "error" ? 0.3 : (document.body.classList.contains("dark") ? 0.6 : 0.45);
       if (played && u <= played) ink = 1;
       if (head > -1) ink = Math.max(ink, Math.exp(-Math.pow((u - head) / 0.07, 2)));
-      if (state === "processing" && still()) ink = 0.55;
       const x = left + u * span + shake;
-      ctx.strokeStyle = ink > 0.5 ? c.ink : c.ink3;
-      ctx.globalAlpha = ink > 0.5 ? 0.35 + 0.65 * ((ink - 0.5) / 0.5) : 0.45 + ink;
-      if (state === "processing" && ink <= 0.5) { ctx.strokeStyle = c.ink4; ctx.globalAlpha = 1; }
+      ctx.strokeStyle = ink > 0.9 && played && u <= played ? c.ink : c.accent;
+      ctx.globalAlpha = ink;
       ctx.beginPath();
       ctx.moveTo(x, mid - height);
       ctx.lineTo(x, mid + height);
@@ -346,12 +359,9 @@
       const breath = state === "recording" && !still() ? (1.2 + 0.8 * Math.sin(now / 900)) * dpr : 0;
       const amp = breath + level * mid * 1.05;
       if (amp < 0.3 * dpr) {
-        ctx.globalAlpha = lineAlpha;
-        ctx.strokeStyle = state === "idle" ? c.ink4 : c.ink3;
-        if (state === "processing" && !still()) {
-          // No clip profile to read across: a short ink segment travels the line.
-          ctx.strokeStyle = c.ink4;
-        }
+        ctx.globalAlpha = lineAlpha * (state === "idle" ? 0.4 : 0.55);
+        // No clip profile to read across while processing: a short segment travels the line.
+        ctx.strokeStyle = c.accent;
         ctx.lineWidth = dpr;
         ctx.beginPath();
         ctx.moveTo(w * 0.04 + shake, mid);
@@ -363,9 +373,10 @@
           const x = w * 0.04 + w * 0.92 * e;
           const gradient = ctx.createLinearGradient(x - w * 0.12, 0, x + w * 0.12, 0);
           gradient.addColorStop(0, "rgba(0,0,0,0)");
-          gradient.addColorStop(0.5, c.ink);
+          gradient.addColorStop(0.5, c.accent);
           gradient.addColorStop(1, "rgba(0,0,0,0)");
           ctx.strokeStyle = gradient;
+          ctx.globalAlpha = lineAlpha;
           ctx.lineWidth = 1.5 * dpr;
           ctx.beginPath();
           ctx.moveTo(Math.max(w * 0.04, x - w * 0.12), mid);
@@ -374,7 +385,7 @@
         }
         ctx.globalAlpha = 1;
       } else {
-        drawLine(ctx, w, h, dpr, lineAlpha, c.ink, amp);
+        drawLine(ctx, w, h, dpr, lineAlpha, c.accent, amp);
       }
     }
     if (clip.peaks && profileMix > 0.01) drawProfile(ctx, w, h, dpr, profileMix, c, now, shake);

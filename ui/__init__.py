@@ -41,8 +41,8 @@ STAGE_COPY = {
 }
 
 FONTS_HEAD = """
-<meta name="theme-color" content="#FAFAF9" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#0B0B0B" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#F5F8FC" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0C1014" media="(prefers-color-scheme: dark)">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap">
@@ -53,43 +53,45 @@ SANS = ["-apple-system", "BlinkMacSystemFont", "SF Pro Text", "Inter", "PingFang
         "HarmonyOS Sans SC", "Microsoft YaHei", "Noto Sans SC", "system-ui", "sans-serif"]
 MONO = ["SF Mono", "ui-monospace", "SFMono-Regular", "JetBrains Mono", "Menlo", "monospace"]
 
-INK, INK_DARK = "#171717", "#EDEDED"
+# Theme fallbacks approximate the default Mist palette; style.css owns the real tokens.
+INK, INK_DARK = "#1B222A", "#E9EBEE"
+ACCENT, ACCENT_DARK = "#2B415E", "#B4CDEE"
 
 
 def build_theme() -> gr.themes.Base:
     """Base theme mapped onto the design tokens; style.css refines the details."""
     return gr.themes.Base(
-        primary_hue="neutral", neutral_hue="neutral", font=SANS, font_mono=MONO,
+        primary_hue="slate", neutral_hue="slate", font=SANS, font_mono=MONO,
         radius_size=gr.themes.sizes.radius_md, spacing_size=gr.themes.sizes.spacing_lg,
     ).set(
-        body_background_fill="#FAFAF9", body_background_fill_dark="#0B0B0B",
+        body_background_fill="#F5F8FC", body_background_fill_dark="#0C1014",
         body_text_color=INK, body_text_color_dark=INK_DARK,
-        body_text_color_subdued="#737373", body_text_color_subdued_dark="#8F8F8F",
-        background_fill_primary="#FFFFFF", background_fill_primary_dark="#121212",
-        background_fill_secondary="#F4F4F3", background_fill_secondary_dark="#1A1A1A",
+        body_text_color_subdued="#545C63", body_text_color_subdued_dark="#9AA1A8",
+        background_fill_primary="#FDFEFF", background_fill_primary_dark="#14181C",
+        background_fill_secondary="#EEF1F5", background_fill_secondary_dark="#1D2227",
         border_color_primary="rgba(0,0,0,0.08)", border_color_primary_dark="rgba(255,255,255,0.08)",
         block_background_fill="transparent", block_background_fill_dark="transparent",
         block_border_width="0px", block_shadow="none", block_padding="0px",
         block_label_background_fill="transparent", block_label_background_fill_dark="transparent",
-        block_label_border_width="0px", block_label_text_color="#737373", block_label_text_color_dark="#8F8F8F",
+        block_label_border_width="0px", block_label_text_color="#868D94", block_label_text_color_dark="#80878E",
         block_title_background_fill="transparent", block_title_background_fill_dark="transparent",
-        block_title_text_color="#737373", block_title_text_color_dark="#8F8F8F",
+        block_title_text_color="#868D94", block_title_text_color_dark="#80878E",
         block_title_text_weight="500", block_title_text_size="12px", block_title_padding="0px",
         input_background_fill="transparent", input_background_fill_dark="transparent",
         input_border_color="transparent", input_border_color_dark="transparent",
         input_shadow="none", input_shadow_focus="none",
         input_border_color_focus="transparent", input_border_color_focus_dark="transparent",
-        button_primary_background_fill=INK, button_primary_background_fill_dark=INK_DARK,
-        button_primary_background_fill_hover="#000000", button_primary_background_fill_hover_dark="#FFFFFF",
-        button_primary_text_color="#FFFFFF", button_primary_text_color_dark="#0B0B0B",
+        button_primary_background_fill=ACCENT, button_primary_background_fill_dark=ACCENT_DARK,
+        button_primary_background_fill_hover="#22354E", button_primary_background_fill_hover_dark="#C8DAF3",
+        button_primary_text_color="#FDFEFF", button_primary_text_color_dark="#14181C",
         button_secondary_background_fill="transparent", button_secondary_background_fill_dark="transparent",
         button_secondary_background_fill_hover="rgba(0,0,0,0.04)",
         button_secondary_background_fill_hover_dark="rgba(255,255,255,0.06)",
         button_secondary_text_color=INK, button_secondary_text_color_dark=INK_DARK,
         button_secondary_border_color="rgba(0,0,0,0.10)", button_secondary_border_color_dark="rgba(255,255,255,0.12)",
-        color_accent=INK, color_accent_soft="rgba(0,0,0,0.05)", color_accent_soft_dark="rgba(255,255,255,0.08)",
-        loader_color=INK, loader_color_dark=INK_DARK, shadow_drop="none", shadow_drop_lg="none",
-        checkbox_label_background_fill_selected=INK,
+        color_accent="#58769F", color_accent_soft="rgba(0,0,0,0.05)", color_accent_soft_dark="rgba(255,255,255,0.08)",
+        loader_color="#58769F", loader_color_dark="#93B3DF", shadow_drop="none", shadow_drop_lg="none",
+        checkbox_label_background_fill_selected=ACCENT,
     )
 
 
