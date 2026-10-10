@@ -255,13 +255,14 @@ def build_demo(translator, demo_mode: bool = False) -> gr.Blocks:
                             )
                             swap = gr.Button("⇄", elem_id="st-swap", scale=0, min_width=40)
                             target = gr.Dropdown(LANGUAGES, value="eng", label="翻译为", elem_id="st-target", scale=5, min_width=120)
-                        gr.HTML(ui.VISUALIZER_HTML, container=False, padding=False, elem_id="st-viz-wrap")
+                        gr.HTML(ui.STAGE_HTML, container=False, padding=False, elem_id="st-stage-visual")
                         audio = gr.Audio(
                             sources=["upload", "microphone"], type="filepath", format="wav",
                             label="上传音频 / 麦克风录音", show_label=False, editable=False, elem_id="st-audio",
                             waveform_options=gr.WaveformOptions(
-                                waveform_color="#A9A6AF", waveform_progress_color="#F2542D",
-                                trim_region_color="#F2542D", show_recording_waveform=True,
+                                # The stage's voice wave is the live recording visual.
+                                waveform_color="#B8B8BF", waveform_progress_color="#7C5CFF",
+                                trim_region_color="#7C5CFF", show_recording_waveform=False,
                             ),
                         )
                         with gr.Row(elem_id="st-actions"):
@@ -269,7 +270,6 @@ def build_demo(translator, demo_mode: bool = False) -> gr.Blocks:
                             clear = gr.Button("清空", variant="secondary", elem_id="st-clear", scale=1, min_width=88)
                         gr.HTML(ui.hint_html(translator.max_seconds), container=False, padding=False)
                     with gr.Column(scale=13, elem_id="st-output", elem_classes="st-pane"):
-                        gr.HTML(ui.STEPPER_HTML, container=False, padding=False, elem_id="st-steps-wrap")
                         with gr.Group(elem_classes="st-card st-card-source"):
                             language_result = gr.Textbox(
                                 label="输入语言识别", show_label=False, value="等待检测", interactive=False,
@@ -277,12 +277,12 @@ def build_demo(translator, demo_mode: bool = False) -> gr.Blocks:
                             )
                             transcript = gr.Textbox(
                                 label="原文", lines=3, max_lines=8, interactive=False, buttons=["copy"],
-                                placeholder="识别出的原文会显示在这里", elem_id="st-transcript",
+                                placeholder="说出或上传的内容会显示在这里", elem_id="st-transcript",
                             )
                         with gr.Group(elem_classes="st-card st-card-target"):
                             translation = gr.Textbox(
                                 label="译文", lines=4, max_lines=10, interactive=False, buttons=["copy"],
-                                placeholder="译文会显示在这里", elem_id="st-translation",
+                                placeholder="译文将在这里出现", elem_id="st-translation",
                             )
                         status = gr.Textbox(
                             label="状态", show_label=False, value="等待输入音频", interactive=False,
