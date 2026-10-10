@@ -14,8 +14,8 @@ import gradio as gr
 import numpy as np
 
 PAIR_CODES = {"zh-CN": "cmn", "en": "eng", "fr": "fra"}
-# Short pause so the processing state is visible; it does not imitate real latency.
-DEMO_DELAY_SECONDS = 1.6
+# Short pause per stage so each processing stage is visible; it does not imitate real latency.
+DEMO_STAGE_SECONDS = 0.6
 DEMO_STATUS_PREFIX = "完成 · 演示模式参考文本"
 
 
@@ -80,11 +80,17 @@ class DemoTranslator:
                 f"演示模式只有该示例的{self.language_names[reference['tgt']]}参考译文，"
                 f"请将输出语言设为{self.language_names[reference['tgt']]}。"
             )
-        time.sleep(DEMO_DELAY_SECONDS)
+        # Same stage sequence as SpeechTranslator.translate, with reference text.
         src = reference["src"]
         if src_lang == self.auto_language:
+            yield "", "", "等待检测", "排队或处理中 · 正在识别语言"
+            time.sleep(DEMO_STAGE_SECONDS)
             language_result = f"演示模式：示例标注语言 · {self.language_names[src]}"
         else:
             language_result = f"手动指定：{self.language_names[src_lang]}"
+        yield "", "", language_result, "排队或处理中 · 正在转写"
+        time.sleep(DEMO_STAGE_SECONDS)
+        yield reference["source_text"], "", language_result, "排队或处理中 · 正在翻译"
+        time.sleep(DEMO_STAGE_SECONDS)
         status = f"{DEMO_STATUS_PREFIX} · 音频 {len(audio) / sample_rate:.1f} 秒 · 用时 {time.monotonic() - started:.1f} 秒"
-        return reference["source_text"], reference["translation"], language_result, status
+        yield reference["source_text"], reference["translation"], language_result, status

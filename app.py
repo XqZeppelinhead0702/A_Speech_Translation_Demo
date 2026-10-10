@@ -152,6 +152,9 @@ class SpeechTranslator:
         LOGGER.info("Model ready on %s", torch.cuda.get_device_name(0))
 
     def translate(self, audio_path: str | None, src_lang: str, tgt_lang: str):
+        # A generator: each yield reports the stage actually running, so the page can
+        # show it and fill in the transcript before the translation. The last yield is
+        # the result; API clients still receive only that final value.
         if src_lang not in LANGUAGE_CODES | {AUTO_LANGUAGE} or tgt_lang not in LANGUAGE_CODES:
             raise gr.Error("请选择有效的输入语言和输出语言。")
         audio, sample_rate = read_audio(audio_path, self.max_seconds)
@@ -167,6 +170,7 @@ class SpeechTranslator:
                     waveform = torchaudio.functional.resample(waveform, sample_rate, 16_000)
                 detection_elapsed = None
                 if src_lang == AUTO_LANGUAGE:
+                    yield "", "", "等待检测", "排队或处理中 · 正在识别语言"
                     prediction = self.language_detector.detect(waveform.numpy())
                     detected_code = self.language_detector.to_seamless_code(prediction.code)
                     if prediction.confidence < self.lid_min_confidence:
@@ -185,6 +189,7 @@ class SpeechTranslator:
                     detection_elapsed = prediction.elapsed
                 else:
                     language_result = f"手动指定：{LANGUAGE_NAMES[src_lang]}"
+                yield "", "", language_result, "排队或处理中 · 正在转写"
                 self.load_model()
                 inputs = self.processor(
                     audio=waveform.numpy(), sampling_rate=16_000, return_tensors="pt",
@@ -204,9 +209,13 @@ class SpeechTranslator:
                         **inputs, tgt_lang=src_lang, generate_speech=False,
                         text_max_new_tokens=self.max_tokens, text_do_sample=False,
                     ))
-                    if src_lang == tgt_lang:
-                        translation = transcript
-                    else:
+                if src_lang == tgt_lang:
+                    translation = transcript
+                else:
+                    # Yield outside inference_mode: Gradio may resume the generator on
+                    # another worker thread, and grad mode is thread-local.
+                    yield transcript, "", language_result, "排队或处理中 · 正在翻译"
+                    with torch.inference_mode():
                         translation = decode_output(self.processor, self.model.generate(
                             **inputs, tgt_lang=tgt_lang, generate_speech=False,
                             text_max_new_tokens=self.max_tokens, text_do_sample=False,
@@ -214,7 +223,7 @@ class SpeechTranslator:
                 status = f"完成 · 音频 {len(audio) / sample_rate:.1f} 秒 · 用时 {time.monotonic() - started:.1f} 秒"
                 if detection_elapsed is not None:
                     status += f"（语言检测 {detection_elapsed:.2f} 秒）"
-                return transcript, translation, language_result, status
+                yield transcript, translation, language_result, status
             except gr.Error:
                 raise
             except LanguageDetectionError as exc:
@@ -261,8 +270,8 @@ def build_demo(translator, demo_mode: bool = False) -> gr.Blocks:
                             label="上传音频 / 麦克风录音", show_label=False, editable=False, elem_id="st-audio",
                             waveform_options=gr.WaveformOptions(
                                 # The stage's voice wave is the live recording visual.
-                                waveform_color="#B8B8BF", waveform_progress_color="#7C5CFF",
-                                trim_region_color="#7C5CFF", show_recording_waveform=False,
+                                waveform_color="#C9C9C6", waveform_progress_color="#8F8F8F",
+                                trim_region_color="#8F8F8F", show_recording_waveform=False,
                             ),
                         )
                         with gr.Row(elem_id="st-actions"):
@@ -328,11 +337,11 @@ def build_demo(translator, demo_mode: bool = False) -> gr.Blocks:
         # This first step has no HTTP round trip. Lock this tab's inputs before
         # capturing the request for the existing serial inference queue.
         submission = submit.click(
-            fn=None, inputs=[audio], outputs=[*controls, status],
+            fn=None, inputs=[audio], outputs=[*controls, transcript, translation, language_result, status],
             js=f"""(clip) => {{
                 if (!clip || !clip.path) throw new Error("音频尚未就绪，请先停止录音并等待上传完成。");
                 return [...Array.from({{length: {len(controls)}}}, () => ({{__type__: "update", interactive: false}})),
-                    "排队或处理中 · 请稍候"];
+                    "", "", "等待检测", "排队或处理中 · 请稍候"];
             }}""",
             queue=False, trigger_mode="once",
         )
