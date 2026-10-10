@@ -46,6 +46,7 @@ import soundfile as sf
 
 from language_detection import BACKENDS, DEFAULT_BACKEND, DEFAULT_MMS_MODEL_DIR as DEFAULT_LID_MODEL_DIR
 from language_detection import LanguageDetectionError, create_language_detector, default_model_dir
+import ui
 
 SAMPLE_DIR = PROJECT_DIR / "data" / "test_samples"
 LANGUAGES = [
@@ -67,11 +68,7 @@ EXAMPLES = [
     [str(SAMPLE_DIR / "en_zh-CN_01.mp3"), AUTO_LANGUAGE, "cmn"],
     [str(SAMPLE_DIR / "fr_en_04.mp3"), AUTO_LANGUAGE, "eng"],
 ]
-CSS = """
-.gradio-container {max-width: 1080px !important; margin: auto !important;}
-#intro {padding: 12px 4px 20px;}
-#intro h1 {font-size: 30px; letter-spacing: -.5px;}
-"""
+ENGINE_LABEL = "SeamlessM4T v2 · 本地 GPU"
 LOGGER = logging.getLogger(__name__)
 
 
@@ -231,39 +228,85 @@ class SpeechTranslator:
                 raise gr.Error("处理失败，请重试或联系管理员查看服务器日志。") from exc
 
 
-def build_demo(translator: SpeechTranslator) -> gr.Blocks:
+def example_label(path: str, src: str, tgt: str) -> str:
+    """Button text for a bundled sample: language pair plus its real duration."""
+    short = {"cmn": "中文", "eng": "英语", "fra": "法语"}
+    stem = Path(path).stem.split("_")[0]
+    spoken = {"zh-CN": "中文", "en": "英语", "fr": "法语"}.get(stem, "自动检测" if src == AUTO_LANGUAGE else short.get(src, LANGUAGE_NAMES[src]))
+    try:
+        seconds = f" · {sf.info(path).duration:.1f}s"
+    except (OSError, RuntimeError):
+        seconds = ""
+    return f"{spoken} → {short.get(tgt, LANGUAGE_NAMES[tgt])}{seconds}"
+
+
+def build_demo(translator, demo_mode: bool = False) -> gr.Blocks:
     with gr.Blocks(title="语音识别与翻译", analytics_enabled=False, delete_cache=(3600, 3600)) as demo:
-        gr.Markdown(
-            "# 语音识别与翻译\n上传音频或录制语音，自动检测输入语言，选择目标语言即可查看原文和译文。",
-            elem_id="intro",
-        )
-        with gr.Row():
-            with gr.Column(scale=1):
-                audio = gr.Audio(
-                    sources=["upload", "microphone"], type="filepath", format="wav",
-                    label="上传音频 / 麦克风录音", editable=False,
-                )
-                with gr.Row():
-                    source = gr.Dropdown([("自动检测", AUTO_LANGUAGE), *LANGUAGES], value=AUTO_LANGUAGE, label="输入语言")
-                    target = gr.Dropdown(LANGUAGES, value="eng", label="输出语言")
-                gr.Markdown(f"输入语言默认自动检测，也可手动选择；检测不准时请手动确认。最长 {translator.max_seconds:g} 秒。录音后请先停止，等待“音频已就绪”再提交。麦克风录音需要 HTTPS 和浏览器授权。")
-                with gr.Row():
-                    submit = gr.Button("识别并翻译", variant="primary", interactive=False)
-                    clear = gr.Button("清空")
-            with gr.Column(scale=1):
-                language_result = gr.Textbox(label="输入语言识别", value="等待检测", interactive=False)
-                transcript = gr.Textbox(label="原文识别", lines=5, interactive=False)
-                translation = gr.Textbox(label="翻译结果", lines=5, interactive=False)
-                status = gr.Textbox(label="状态", value="等待输入音频", interactive=False)
-        examples = [example for example in EXAMPLES if Path(example[0]).is_file()]
-        controls = [submit, clear, audio, source, target]
-        if examples:
-            example_widget = gr.Examples(
-                examples=examples, inputs=[audio, source, target],
-                label="试试示例（点击填入后，再点击“识别并翻译”）",
-                cache_examples=False,
-            )
-            controls.append(example_widget.dataset)
+        gr.HTML(ui.topbar_html(ENGINE_LABEL, demo_mode), container=False, padding=False, elem_id="st-topbar")
+        with gr.Tabs(elem_id="st-tabs", selected="translate") as tabs:
+            with gr.Tab("语音翻译", id="translate", elem_id="st-tab-translate"):
+                gr.HTML(ui.hero_html(len(LANGUAGES), demo_mode), container=False, padding=False)
+                with gr.Row(elem_id="st-workspace", equal_height=False):
+                    with gr.Column(scale=11, elem_id="st-input", elem_classes="st-pane"):
+                        with gr.Row(elem_id="st-langbar"):
+                            source = gr.Dropdown(
+                                [("自动检测", AUTO_LANGUAGE), *LANGUAGES], value=AUTO_LANGUAGE,
+                                label="说话语言", elem_id="st-source", scale=5, min_width=120,
+                            )
+                            swap = gr.Button("⇄", elem_id="st-swap", scale=0, min_width=40)
+                            target = gr.Dropdown(LANGUAGES, value="eng", label="翻译为", elem_id="st-target", scale=5, min_width=120)
+                        gr.HTML(ui.VISUALIZER_HTML, container=False, padding=False, elem_id="st-viz-wrap")
+                        audio = gr.Audio(
+                            sources=["upload", "microphone"], type="filepath", format="wav",
+                            label="上传音频 / 麦克风录音", show_label=False, editable=False, elem_id="st-audio",
+                            waveform_options=gr.WaveformOptions(
+                                waveform_color="#A9A6AF", waveform_progress_color="#F2542D",
+                                trim_region_color="#F2542D", show_recording_waveform=True,
+                            ),
+                        )
+                        with gr.Row(elem_id="st-actions"):
+                            submit = gr.Button("识别并翻译", variant="primary", interactive=False, elem_id="st-submit", scale=3)
+                            clear = gr.Button("清空", variant="secondary", elem_id="st-clear", scale=1, min_width=88)
+                        gr.HTML(ui.hint_html(translator.max_seconds), container=False, padding=False)
+                    with gr.Column(scale=13, elem_id="st-output", elem_classes="st-pane"):
+                        gr.HTML(ui.STEPPER_HTML, container=False, padding=False, elem_id="st-steps-wrap")
+                        with gr.Group(elem_classes="st-card st-card-source"):
+                            language_result = gr.Textbox(
+                                label="输入语言识别", show_label=False, value="等待检测", interactive=False,
+                                elem_id="st-lang-result", container=False,
+                            )
+                            transcript = gr.Textbox(
+                                label="原文", lines=3, max_lines=8, interactive=False, buttons=["copy"],
+                                placeholder="识别出的原文会显示在这里", elem_id="st-transcript",
+                            )
+                        with gr.Group(elem_classes="st-card st-card-target"):
+                            translation = gr.Textbox(
+                                label="译文", lines=4, max_lines=10, interactive=False, buttons=["copy"],
+                                placeholder="译文会显示在这里", elem_id="st-translation",
+                            )
+                        status = gr.Textbox(
+                            label="状态", show_label=False, value="等待输入音频", interactive=False,
+                            elem_id="st-status", container=False,
+                        )
+                examples = [example for example in EXAMPLES if Path(example[0]).is_file()]
+                example_buttons = []
+                if examples:
+                    with gr.Column(elem_id="st-examples"):
+                        gr.HTML(ui.section_head_html("试试示例", "CoVoST 2 测试集样本 · 点击填入后再提交"), container=False, padding=False)
+                        with gr.Row(elem_id="st-example-row"):
+                            for path, src, tgt in examples:
+                                button = gr.Button(example_label(path, src, tgt), elem_classes="st-example", size="md")
+                                button.click(
+                                    lambda path=path, src=src, tgt=tgt: (path, src, tgt),
+                                    outputs=[audio, source, target], queue=False, show_progress="hidden", api_visibility="private",
+                                )
+                                example_buttons.append(button)
+            with gr.Tab("同声传译", id="interpret", elem_id="st-tab-interpret"):
+                gr.HTML(ui.INTERPRET_HTML, container=False, padding=False)
+                back = gr.Button("先体验语音翻译", variant="primary", elem_id="st-back", size="md")
+                back.click(lambda: gr.Tabs(selected="translate"), outputs=tabs, queue=False, api_visibility="private")
+        gr.HTML(ui.footer_html("演示模式 · 未加载模型" if demo_mode else ENGINE_LABEL), container=False, padding=False)
+        controls = [submit, clear, audio, source, target, swap, *example_buttons]
         # Run readiness/control updates in the browser. A local recording preview
         # can appear before its upload completes; server-side change callbacks also
         # arrive late through a tunnel. Never reuse an earlier recording as fallback.
@@ -297,7 +340,7 @@ def build_demo(translator: SpeechTranslator) -> gr.Blocks:
             translator.translate, inputs=[audio, source, target],
             outputs=[transcript, translation, language_result, status],
             concurrency_limit=1, concurrency_id="speech-model", api_name="translate",
-            trigger_mode="once",
+            trigger_mode="once", show_progress="hidden",
         )
         inference.failure(
             fn=None, outputs=[status], queue=False,
@@ -316,12 +359,24 @@ def build_demo(translator: SpeechTranslator) -> gr.Blocks:
                 js="""(clip) => ["", "", "等待检测", clip && clip.path
                     ? "音频已就绪 · 可以识别并翻译" : "等待音频 · 录音后请先停止并等待上传完成"]""",
             )
+        swap.click(
+            fn=None, inputs=[source, target], outputs=[source, target], queue=False,
+            js=f"""(src, tgt) => src === "{AUTO_LANGUAGE}" ? [src, tgt] : [tgt, src]""",
+        )
         clear.click(
             fn=None, outputs=[audio, source, transcript, translation, language_result, status, submit],
             js='() => [null, "auto", "", "", "等待检测", "等待输入音频", {__type__: "update", interactive: false}]',
             queue=False,
         )
     return demo.queue(max_size=16, default_concurrency_limit=1)
+
+
+def launch_styling() -> dict:
+    """Theme, styles, fonts and front-end script, passed to every launch()."""
+    return {
+        "theme": ui.build_theme(), "css": ui.load_css(), "js": ui.load_js(),
+        "head": ui.FONTS_HEAD, "footer_links": [],
+    }
 
 
 def env_bool(name: str, default: bool) -> bool:
@@ -364,6 +419,10 @@ def parse_args(argv=None):
     parser.add_argument("--lid-precision", choices=["float16", "bfloat16", "float32"], default=os.getenv("DEMO_LID_PRECISION", "float32"))
     parser.add_argument("--lid-max-seconds", type=float, default=float(os.getenv("DEMO_LID_MAX_SECONDS", "10")))
     parser.add_argument("--lid-min-confidence", type=float, default=float(os.getenv("DEMO_LID_MIN_CONFIDENCE", "0.5")))
+    parser.add_argument(
+        "--demo-mode", action=argparse.BooleanOptionalAction, default=env_bool("DEMO_MODE", False),
+        help="不加载模型，仅为内置示例返回数据集参考文本，用于在无 GPU 环境预览界面",
+    )
     parser.add_argument("--startup-timeout", type=int, default=int(os.getenv("DEMO_STARTUP_TIMEOUT", "90")))
     args = parser.parse_args(argv)
     if args.lid_backend not in BACKENDS:
@@ -398,16 +457,23 @@ def main():
     username, password = os.getenv("DEMO_AUTH_USER"), os.getenv("DEMO_AUTH_PASSWORD")
     if bool(username) != bool(password):
         raise RuntimeError("DEMO_AUTH_USER 和 DEMO_AUTH_PASSWORD 必须同时设置。")
-    translator = SpeechTranslator(
-        args.model_dir.resolve(), args.precision, args.max_seconds, args.max_new_tokens,
-        args.lid_model_dir, args.lid_max_seconds, args.lid_min_confidence,
-        args.lid_backend, args.lid_precision,
-    )
-    demo = build_demo(translator)
+    if args.demo_mode:
+        from demo_mode import DemoTranslator
+
+        LOGGER.warning("演示模式：不加载模型，仅为内置示例返回数据集参考文本。")
+        translator = DemoTranslator(SAMPLE_DIR, args.max_seconds, LANGUAGE_NAMES, LANGUAGE_CODES, AUTO_LANGUAGE, read_audio)
+    else:
+        translator = SpeechTranslator(
+            args.model_dir.resolve(), args.precision, args.max_seconds, args.max_new_tokens,
+            args.lid_model_dir, args.lid_max_seconds, args.lid_min_confidence,
+            args.lid_backend, args.lid_precision,
+        )
+    demo = build_demo(translator, demo_mode=args.demo_mode)
     try:
-        LOGGER.info("语言检测模块：%s", translator.language_detector.display_name)
-        translator.language_detector.load_model()
-        translator.load_model()
+        if not args.demo_mode:
+            LOGGER.info("语言检测模块：%s", translator.language_detector.display_name)
+            translator.language_detector.load_model()
+            translator.load_model()
         print("正在启动界面，请等待公网入口打印 PUBLIC_URL；本地监听地址不能用于公网访问。", flush=True)
         with startup_deadline(args.startup_timeout):
             demo.launch(
@@ -416,8 +482,7 @@ def main():
                 allowed_paths=[example[0] for example in EXAMPLES if Path(example[0]).is_file()],
                 blocked_paths=[str(args.model_dir.resolve()), str(args.lid_model_dir.resolve()), str(PROJECT_DIR / "ckpts"), str(PROJECT_DIR / "outs")],
                 max_file_size="25mb", show_error=False, inbrowser=False,
-                theme=gr.themes.Soft(primary_hue="blue"), css=CSS,
-                prevent_thread_lock=True,
+                **launch_styling(), prevent_thread_lock=True,
             )
         if args.share and not demo.share_url:
             raise RuntimeError("公网分享链接创建失败，请检查计算节点的出站网络，或使用 README 中的固定域名方案。")

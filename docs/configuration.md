@@ -45,6 +45,7 @@ DEMO_CONDA_ENV=st_demo
 | `DEMO_HOST` | 脚本 `127.0.0.1` | 仅本地后端脚本可调整；其他模式固定回环地址 |
 | `DEMO_PRECISION` | `float16` | `float16` / `bfloat16` / `float32` |
 | `DEMO_MAX_SECONDS` | `60` | 音频时长上限 |
+| `DEMO_MODE` | `0` | 设为 `1` 进入演示模式：不加载模型，仅为内置示例返回数据集参考文本，用于无 GPU 预览界面 |
 | `DEMO_STARTUP_TIMEOUT` | `90` | 页面/分享启动超时；不限制模型加载或服务运行时长 |
 | `DEMO_ROOT_PATH` | 空 | 域名子路径部署时设置，需与代理配置匹配 |
 | `DEMO_AUTH_USER`、`DEMO_AUTH_PASSWORD` | 空 | 同时设置启用 Gradio 登录 |
