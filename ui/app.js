@@ -8,6 +8,7 @@
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
   const $ = (selector) => document.querySelector(selector);
   const still = () => reducedMotion.matches;
+  /* FILE_PLAYBACK */
   // Palette preview: ?palette=sage or ?palette=dusk swaps the colour tokens (style.css).
   const palette = new URLSearchParams(location.search).get("palette");
   if (palette && /^[a-z]+$/.test(palette)) root.dataset.stPalette = palette;
@@ -95,7 +96,10 @@
       // Undecodable here (codec, network): the stage falls back to the plain line.
     }
   }
-  function playerEl() { return $("#st-audio audio"); }
+  function playerEl() {
+    return !$("#st-file-playback")?.hidden && $("#st-playback-audio")?.currentSrc
+      ? $("#st-playback-audio") : $("#st-audio audio");
+  }
 
   // ---- State ------------------------------------------------------------------
   function deriveState(text) {
@@ -400,7 +404,7 @@
   window.addEventListener("keydown", (event) => {
     if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
       const button = $("#st-submit");
-      if (button && !button.disabled) { event.preventDefault(); button.click(); }
+      if (button && button.offsetParent !== null && !button.disabled) { event.preventDefault(); button.click(); }
     }
   });
 

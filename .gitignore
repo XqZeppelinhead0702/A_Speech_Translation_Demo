@@ -1,11 +1,14 @@
 # Legacy site-specific jobs remain local; portable launchers are published.
 /scripts/slurm/serve_demo.sh
 /scripts/slurm/test_*.sh
+# Local streaming ASR/cascade/Hy-MT2/vLLM benchmarks and browser test assets.
+# Public scripts/run/serve_vllm.sh, scripts/slurm/serve_vllm.sh and check_vllm.py remain included.
+/scripts/testing/
 /README_prev.md
 # Model test scripts/results.
 /test/
 /tests/
-# Only sample MP3 files and their reference text are published from this directory.
+# Publish bundled sample audio, reference text and source metadata.
 /data/test_samples/*
 
 # Model weights and downloads (prepare locally; do not upload to GitHub).
@@ -42,6 +45,9 @@ slurm-*.err
 # Keep bundled demo audio; these exceptions must follow the general audio rules.
 !/data/test_samples/*.mp3
 !/data/test_samples/references.csv
+!/data/test_samples/realtime_samples.json
+!/data/test_samples/realtime_samples_long.json
+!/data/test_samples/SOURCES.md
 
 # Private configuration and credentials. Only sanitized example files are public.
 .env

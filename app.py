@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext, ExitStack
 import logging
 import os
 from pathlib import Path
@@ -47,6 +47,7 @@ import soundfile as sf
 from language_detection import BACKENDS, DEFAULT_BACKEND, DEFAULT_MMS_MODEL_DIR as DEFAULT_LID_MODEL_DIR
 from language_detection import LanguageDetectionError, create_language_detector, default_model_dir
 import ui
+from sample_catalog import load_demo_samples
 
 SAMPLE_DIR = PROJECT_DIR / "data" / "test_samples"
 LANGUAGES = [
@@ -63,12 +64,14 @@ LANGUAGES = [
 LANGUAGE_CODES = {code for _, code in LANGUAGES}
 LANGUAGE_NAMES = {code: name.split(" · ")[0] for name, code in LANGUAGES}
 AUTO_LANGUAGE = "auto"
-EXAMPLES = [
-    [str(SAMPLE_DIR / "zh-CN_en_04.mp3"), AUTO_LANGUAGE, "eng"],
-    [str(SAMPLE_DIR / "en_zh-CN_01.mp3"), AUTO_LANGUAGE, "cmn"],
-    [str(SAMPLE_DIR / "fr_en_04.mp3"), AUTO_LANGUAGE, "eng"],
-]
-ENGINE_LABEL = "SeamlessM4T v2 · 本地 GPU"
+SHOWCASE_SAMPLES = load_demo_samples(SAMPLE_DIR)
+if any(item["source_lang"] not in LANGUAGE_CODES or item["target_lang"] not in LANGUAGE_CODES
+       for item in SHOWCASE_SAMPLES):
+    raise ValueError("展示样本的语言不在文件翻译页面支持范围内。")
+EXAMPLES = [[str(SAMPLE_DIR / item["file"]), item["source_lang"], item["target_lang"]]
+            for item in SHOWCASE_SAMPLES]
+ENGINE_LABEL = "SeamlessM4T v2"
+DEFAULT_FILE_TRANSLATION = "speech"
 LOGGER = logging.getLogger(__name__)
 
 
@@ -117,6 +120,8 @@ class SpeechTranslator:
         lid_model_dir: Path | None = None, lid_max_seconds: float = 10,
         lid_min_confidence: float = 0.5, lid_backend: str = DEFAULT_BACKEND,
         lid_precision: str = "float32",
+        text_translator=None, coordinator=None, default_translation_mode=None,
+        file_asr=None,
     ):
         self.model_dir = model_dir
         self.precision = precision
@@ -129,6 +134,13 @@ class SpeechTranslator:
         self.language_detector = create_language_detector(lid_backend, lid_model_dir, lid_max_seconds, lid_precision)
         self.lid_min_confidence = lid_min_confidence
         self.lock = threading.Lock()
+        self.text_translator = text_translator
+        self.file_asr = file_asr
+        self.file_asr_timeout = float(os.getenv("DEMO_FILE_ASR_TIMEOUT", "120"))
+        if not np.isfinite(self.file_asr_timeout) or self.file_asr_timeout <= 0:
+            raise ValueError("DEMO_FILE_ASR_TIMEOUT 必须为正数。")
+        self.coordinator = coordinator
+        self.default_translation_mode = default_translation_mode or DEFAULT_FILE_TRANSLATION
 
     def load_model(self):
         """Only called at server startup or inference, never when importing the UI."""
@@ -151,13 +163,39 @@ class SpeechTranslator:
         ).to("cuda").eval()
         LOGGER.info("Model ready on %s", torch.cuda.get_device_name(0))
 
-    def translate(self, audio_path: str | None, src_lang: str, tgt_lang: str):
+    def translate(self, audio_path: str | None, src_lang: str, tgt_lang: str, translation_mode=None):
         # A generator: each yield reports the stage actually running, so the page can
         # show it and fill in the transcript before the translation. The last yield is
         # the result; API clients still receive only that final value.
         if src_lang not in LANGUAGE_CODES | {AUTO_LANGUAGE} or tgt_lang not in LANGUAGE_CODES:
             raise gr.Error("请选择有效的输入语言和输出语言。")
         audio, sample_rate = read_audio(audio_path, self.max_seconds)
+        yield from self.translate_audio(audio, sample_rate, src_lang, tgt_lang, translation_mode)
+
+    def translate_audio(self, audio: np.ndarray, sample_rate: int, src_lang: str, tgt_lang: str, translation_mode=None):
+        try:
+            with self.coordinator.file_inference() if self.coordinator else nullcontext():
+                yield from self._translate_audio(audio, sample_rate, src_lang, tgt_lang, translation_mode)
+        except ValueError as exc:
+            raise gr.Error(str(exc)) from exc
+
+    def _translate_audio(self, audio, sample_rate, src_lang, tgt_lang, translation_mode):
+        """The same stage/result generator for in-memory, mono float audio."""
+        translation_mode = translation_mode or self.default_translation_mode
+        if translation_mode not in {"text", "speech"}:
+            raise gr.Error("请选择有效的翻译方式。")
+        if translation_mode == "text" and self.text_translator is None:
+            raise gr.Error("当前服务没有启用文本翻译模型，请选择 SeamlessM4T 直接语音翻译。")
+        if src_lang not in LANGUAGE_CODES | {AUTO_LANGUAGE} or tgt_lang not in LANGUAGE_CODES:
+            raise gr.Error("请选择有效的输入语言和输出语言。")
+        audio = np.asarray(audio, dtype=np.float32)
+        if (
+            audio.ndim != 1 or not len(audio) or not np.isfinite(audio).all()
+            or not isinstance(sample_rate, (int, np.integer)) or sample_rate <= 0
+        ):
+            raise gr.Error("内存音频必须是有效的单声道数组和采样率。")
+        if len(audio) / sample_rate > self.max_seconds:
+            raise gr.Error(f"音频不能超过 {self.max_seconds:g} 秒。")
         import torch
         import torchaudio
 
@@ -189,44 +227,79 @@ class SpeechTranslator:
                     detection_elapsed = prediction.elapsed
                 else:
                     language_result = f"手动指定：{LANGUAGE_NAMES[src_lang]}"
-                yield "", "", language_result, "排队或处理中 · 正在转写"
-                self.load_model()
-                inputs = self.processor(
-                    audio=waveform.numpy(), sampling_rate=16_000, return_tensors="pt",
-                )
-                # Cast floating features only; attention masks must remain integer.
-                inputs = {
-                    key: value.to(
-                        device=self.model.device,
-                        dtype=self.model.dtype if value.is_floating_point() else value.dtype,
-                    )
-                    for key, value in inputs.items()
-                }
-                with torch.inference_mode():
-                    # The speech encoder does not take a forced source language.
-                    # Same-language speech-to-text produces the original transcript.
-                    transcript = decode_output(self.processor, self.model.generate(
-                        **inputs, tgt_lang=src_lang, generate_speech=False,
-                        text_max_new_tokens=self.max_tokens, text_do_sample=False,
-                    ))
+                from realtime.backend import ASR_LANGUAGES
+                asr_source = src_lang
+                use_nemotron = translation_mode == "text" and self.file_asr is not None and asr_source in ASR_LANGUAGES
+                asr_name = "Nemotron（非流式）" if use_nemotron else "SeamlessM4T"
+                asr_started = time.monotonic()
+                LOGGER.info("File ASR started: backend=%s mode=%s source=%s target=%s audio=%.2fs",
+                            asr_name, translation_mode, src_lang, tgt_lang, len(audio) / sample_rate)
+                yield "", "", language_result, f"排队或处理中 · 正在转写 · {asr_name}"
+                if use_nemotron:
+                    from realtime.integration import stream_file_transcription
+                    transcript = ""
+                    drafts = stream_file_transcription(self.file_asr, waveform.numpy(), asr_source,
+                                                       timeout=self.file_asr_timeout)
+                    try:
+                        for draft in drafts:
+                            if draft is not None:
+                                transcript = draft
+                            yield transcript, "", language_result, (
+                                f"排队或处理中 · 正在转写 · {asr_name} · {time.monotonic() - asr_started:.1f} 秒")
+                    finally:
+                        drafts.close()
+                else:
+                    if translation_mode == "text" and self.file_asr is not None:
+                        LOGGER.info("File ASR language %s uses SeamlessM4T compatibility fallback", src_lang)
+                    self.load_model()
+                    inputs = self.processor(audio=waveform.numpy(), sampling_rate=16_000, return_tensors="pt")
+                    # Cast floating features only; masks must remain integer.
+                    inputs = {key: value.to(
+                        device=self.model.device, dtype=self.model.dtype if value.is_floating_point() else value.dtype,
+                    ) for key, value in inputs.items()}
+                    with torch.inference_mode():
+                        transcript = decode_output(self.processor, self.model.generate(
+                            **inputs, tgt_lang=src_lang, generate_speech=False,
+                            text_max_new_tokens=self.max_tokens, text_do_sample=False,
+                            text_max_time=self.file_asr_timeout,
+                        ))
+                    if time.monotonic() - asr_started > self.file_asr_timeout:
+                        raise gr.Error(f"SeamlessM4T 转写超过 {self.file_asr_timeout:g} 秒，请缩短音频或使用支持的 Nemotron 级联语言。")
+                if not transcript.strip():
+                    raise gr.Error("未识别到有效原文，请确认输入语言、音量或更换音频。")
+                LOGGER.info("File ASR completed: backend=%s elapsed=%.3fs chars=%d",
+                            asr_name, time.monotonic() - asr_started, len(transcript))
                 if src_lang == tgt_lang:
                     translation = transcript
                 else:
                     # Yield outside inference_mode: Gradio may resume the generator on
                     # another worker thread, and grad mode is thread-local.
                     yield transcript, "", language_result, "排队或处理中 · 正在翻译"
-                    with torch.inference_mode():
-                        translation = decode_output(self.processor, self.model.generate(
-                            **inputs, tgt_lang=tgt_lang, generate_speech=False,
-                            text_max_new_tokens=self.max_tokens, text_do_sample=False,
-                        ))
+                    LOGGER.info("File translation started: mode=%s source=%s target=%s chars=%d",
+                                translation_mode, src_lang, tgt_lang, len(transcript))
+                    if translation_mode == "text":
+                        from realtime.integration import stream_text_translation
+                        drafts = stream_text_translation(self.text_translator, transcript, src_lang, tgt_lang)
+                        try:
+                            for translation in drafts:
+                                yield transcript, translation, language_result, "排队或处理中 · 正在翻译"
+                        finally:
+                            drafts.close()
+                    else:
+                        with torch.inference_mode():
+                            translation = decode_output(self.processor, self.model.generate(
+                                **inputs, tgt_lang=tgt_lang, generate_speech=False,
+                                text_max_new_tokens=self.max_tokens, text_do_sample=False,
+                            ))
                 status = f"完成 · 音频 {len(audio) / sample_rate:.1f} 秒 · 用时 {time.monotonic() - started:.1f} 秒"
                 if detection_elapsed is not None:
                     status += f"（语言检测 {detection_elapsed:.2f} 秒）"
                 yield transcript, translation, language_result, status
+                LOGGER.info("File request completed: mode=%s elapsed=%.3fs", translation_mode, time.monotonic() - started)
             except gr.Error:
                 raise
-            except LanguageDetectionError as exc:
+            except (LanguageDetectionError, ValueError) as exc:
+                LOGGER.warning("File request rejected: %s", exc)
                 raise gr.Error(str(exc)) from exc
             except torch.cuda.OutOfMemoryError as exc:
                 LOGGER.exception("CUDA out of memory")
@@ -239,6 +312,9 @@ class SpeechTranslator:
 
 def example_label(path: str, src: str, tgt: str) -> str:
     """Button text for a bundled sample: language pair plus its real duration."""
+    for sample in SHOWCASE_SAMPLES:
+        if sample["file"] == Path(path).name:
+            return sample["label"]
     short = {"cmn": "中文", "eng": "英语", "fra": "法语"}
     stem = Path(path).stem.split("_")[0]
     spoken = {"zh-CN": "中文", "en": "英语", "fr": "法语"}.get(stem, "自动检测" if src == AUTO_LANGUAGE else short.get(src, LANGUAGE_NAMES[src]))
@@ -249,11 +325,16 @@ def example_label(path: str, src: str, tgt: str) -> str:
     return f"{spoken} → {short.get(tgt, LANGUAGE_NAMES[tgt])}{seconds}"
 
 
-def build_demo(translator, demo_mode: bool = False) -> gr.Blocks:
+def build_demo(translator, demo_mode: bool = False, realtime_enabled: bool = False) -> gr.Blocks:
+    engine_label = ENGINE_LABEL + (" · Nemotron" if realtime_enabled else "")
+    if getattr(translator, "text_translator", None) is not None:
+        engine_label += " · " + translator.text_translator.name.replace(" 文本翻译", "")
     with gr.Blocks(title="语音识别与翻译", analytics_enabled=False, delete_cache=(3600, 3600)) as demo:
-        gr.HTML(ui.topbar_html(ENGINE_LABEL, demo_mode), container=False, padding=False, elem_id="st-topbar")
-        with gr.Tabs(elem_id="st-tabs", selected="translate") as tabs:
-            with gr.Tab("语音翻译", id="translate", elem_id="st-tab-translate"):
+        gr.HTML(ui.topbar_html(engine_label, demo_mode), container=False, padding=False, elem_id="st-topbar")
+        # Both product modes stay visible, including on narrow screens. Gradio's
+        # default "menu" behavior otherwise moves overflowing tabs to a dropdown.
+        with gr.Tabs(elem_id="st-tabs", selected="translate", overflow_behavior="wrap"):
+            with gr.Tab("语音翻译", id="translate", elem_id="st-tab-translate", render_children=True):
                 gr.HTML(ui.hero_html(len(LANGUAGES), demo_mode), container=False, padding=False)
                 with gr.Row(elem_id="st-workspace", equal_height=False):
                     with gr.Column(scale=11, elem_id="st-input", elem_classes="st-pane"):
@@ -264,6 +345,17 @@ def build_demo(translator, demo_mode: bool = False) -> gr.Blocks:
                             )
                             swap = gr.Button("⇄", elem_id="st-swap", scale=0, min_width=40)
                             target = gr.Dropdown(LANGUAGES, value="eng", label="翻译为", elem_id="st-target", scale=5, min_width=120)
+                        text_enabled = demo_mode or getattr(translator, "text_translator", None) is not None
+                        text_name = getattr(getattr(translator, "text_translator", None), "name", "Hy-MT2 文本翻译")
+                        mode = gr.Dropdown(
+                            [("SeamlessM4T（端到端）", "speech"),
+                             (text_name.replace(" 文本翻译", "") + "（级联）", "text")]
+                            if text_enabled else [("SeamlessM4T（端到端）", "speech")],
+                            value=getattr(translator, "default_translation_mode", DEFAULT_FILE_TRANSLATION),
+                            label="翻译模型", info="端到端：音频直接翻译 · 级联：先识别，再翻译",
+                            filterable=False, allow_custom_value=False,
+                            elem_id="st-translation-mode",
+                        )
                         gr.HTML(ui.STAGE_HTML, container=False, padding=False, elem_id="st-stage-visual")
                         audio = gr.Audio(
                             sources=["upload", "microphone"], type="filepath", format="wav",
@@ -277,6 +369,7 @@ def build_demo(translator, demo_mode: bool = False) -> gr.Blocks:
                         with gr.Row(elem_id="st-actions"):
                             submit = gr.Button("识别并翻译", variant="primary", interactive=False, elem_id="st-submit", scale=3)
                             clear = gr.Button("清空", variant="secondary", elem_id="st-clear", scale=1, min_width=88)
+                        gr.HTML(ui.PLAYBACK_HTML, container=False, padding=False)
                         gr.HTML(ui.hint_html(translator.max_seconds), container=False, padding=False)
                     with gr.Column(scale=13, elem_id="st-output", elem_classes="st-pane"):
                         with gr.Group(elem_classes="st-card st-card-source"):
@@ -301,7 +394,7 @@ def build_demo(translator, demo_mode: bool = False) -> gr.Blocks:
                 example_buttons = []
                 if examples:
                     with gr.Column(elem_id="st-examples"):
-                        gr.HTML(ui.section_head_html("试试示例", "CoVoST 2 测试集样本 · 点击填入后再提交"), container=False, padding=False)
+                        gr.HTML(ui.section_head_html("试试示例", "10–30 秒真人朗读 · 点击填入语言与音频后再提交"), container=False, padding=False)
                         with gr.Row(elem_id="st-example-row"):
                             for path, src, tgt in examples:
                                 button = gr.Button(example_label(path, src, tgt), elem_classes="st-example", size="md")
@@ -310,18 +403,20 @@ def build_demo(translator, demo_mode: bool = False) -> gr.Blocks:
                                     outputs=[audio, source, target], queue=False, show_progress="hidden", api_visibility="private",
                                 )
                                 example_buttons.append(button)
-            with gr.Tab("同声传译", id="interpret", elem_id="st-tab-interpret"):
-                gr.HTML(ui.INTERPRET_HTML, container=False, padding=False)
-                back = gr.Button("先体验语音翻译", variant="primary", elem_id="st-back", size="md")
-                back.click(lambda: gr.Tabs(selected="translate"), outputs=tabs, queue=False, api_visibility="private")
-        gr.HTML(ui.footer_html("演示模式 · 未加载模型" if demo_mode else ENGINE_LABEL), container=False, padding=False)
-        controls = [submit, clear, audio, source, target, swap, *example_buttons]
+            with gr.Tab("同声传译", id="interpret", elem_id="st-tab-interpret", render_children=True):
+                if realtime_enabled:
+                    gr.HTML(ui.realtime_html(), container=False, padding=False)
+                else:
+                    gr.Markdown("当前启动配置关闭了实时翻译。启用 `--realtime` 后，可在此持续讲话并查看原文与译文。")
+        gr.HTML(ui.footer_html("演示模式 · 未加载模型" if demo_mode else engine_label), container=False, padding=False)
+        controls = [submit, clear, audio, source, target, mode, swap, *example_buttons]
         # Run readiness/control updates in the browser. A local recording preview
         # can appear before its upload completes; server-side change callbacks also
         # arrive late through a tunnel. Never reuse an earlier recording as fallback.
         audio.change(
             fn=None, inputs=[audio], outputs=[submit, transcript, translation, language_result, status],
             js="""(clip) => {
+                window.stFilePlayback?.changed(clip);
                 const ready = Boolean(clip && clip.path);
                 return [{__type__: "update", interactive: ready}, "", "", "等待检测",
                     ready ? "音频已就绪 · 可以识别并翻译" : "等待音频 · 录音后请先停止并等待上传完成"];
@@ -330,8 +425,11 @@ def build_demo(translator, demo_mode: bool = False) -> gr.Blocks:
         )
         audio.start_recording(
             fn=None, outputs=[submit, transcript, translation, language_result, status],
-            js="""() => [{__type__: "update", interactive: false}, "", "", "等待检测",
-                "正在录音 · 请先停止，等待音频上传完成"]""",
+            js="""() => {
+                window.stFilePlayback?.stop();
+                return [{__type__: "update", interactive: false}, "", "", "等待检测",
+                    "正在录音 · 请先停止，等待音频上传完成"];
+            }""",
             queue=False,
         )
         # This first step has no HTTP round trip. Lock this tab's inputs before
@@ -340,13 +438,14 @@ def build_demo(translator, demo_mode: bool = False) -> gr.Blocks:
             fn=None, inputs=[audio], outputs=[*controls, transcript, translation, language_result, status],
             js=f"""(clip) => {{
                 if (!clip || !clip.path) throw new Error("音频尚未就绪，请先停止录音并等待上传完成。");
+                window.stFilePlayback?.start(clip);
                 return [...Array.from({{length: {len(controls)}}}, () => ({{__type__: "update", interactive: false}})),
                     "", "", "等待检测", "排队或处理中 · 请稍候"];
             }}""",
             queue=False, trigger_mode="once",
         )
         inference = submission.success(
-            translator.translate, inputs=[audio, source, target],
+            translator.translate, inputs=[audio, source, target, mode],
             outputs=[transcript, translation, language_result, status],
             concurrency_limit=1, concurrency_id="speech-model", api_name="translate",
             trigger_mode="once", show_progress="hidden",
@@ -361,7 +460,7 @@ def build_demo(translator, demo_mode: bool = False) -> gr.Blocks:
             js=f"""(clip) => Array.from({{length: {len(controls)}}}, (_, index) =>
                 ({{__type__: "update", interactive: index === 0 ? Boolean(clip && clip.path) : true}}))""",
         )
-        for component in (source, target):
+        for component in (source, target, mode):
             component.change(
                 fn=None, inputs=[audio],
                 outputs=[transcript, translation, language_result, status], queue=False,
@@ -374,16 +473,19 @@ def build_demo(translator, demo_mode: bool = False) -> gr.Blocks:
         )
         clear.click(
             fn=None, outputs=[audio, source, transcript, translation, language_result, status, submit],
-            js='() => [null, "auto", "", "", "等待检测", "等待输入音频", {__type__: "update", interactive: false}]',
+            js='() => { window.stFilePlayback?.stop(); return [null, "auto", "", "", "等待检测", "等待输入音频", {__type__: "update", interactive: false}]; }',
             queue=False,
         )
     return demo.queue(max_size=16, default_concurrency_limit=1)
 
 
-def launch_styling() -> dict:
+def launch_styling(realtime_enabled: bool = False) -> dict:
     """Theme, styles, fonts and front-end script, passed to every launch()."""
+    script = ui.load_js()
+    if realtime_enabled:
+        script = "() => { (" + script + ")(); (" + ui.realtime_js() + ")(); }"
     return {
-        "theme": ui.build_theme(), "css": ui.load_css(), "js": ui.load_js(),
+        "theme": ui.build_theme(), "css": ui.load_css() + (ui.realtime_css() if realtime_enabled else ""), "js": script,
         "head": ui.FONTS_HEAD, "footer_links": [],
     }
 
@@ -415,6 +517,15 @@ def startup_deadline(seconds: float):
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
+    from realtime.translation import add_translation_arguments
+    add_translation_arguments(parser)
+    parser.set_defaults(mt_backend=os.getenv("DEMO_MT_BACKEND", "hy-mt2-vllm"))
+    parser.add_argument("--realtime", action=argparse.BooleanOptionalAction, default=env_bool("DEMO_REALTIME", True),
+                        help="启用同声传译页，默认启用")
+    parser.add_argument("--file-translation", choices=["speech", "text"], default=os.getenv("DEMO_FILE_TRANSLATION", DEFAULT_FILE_TRANSLATION),
+                        help="文件页默认 speech：SeamlessM4T 端到端语音翻译；text：先转写，再用文本模型翻译")
+    parser.add_argument("--manage-vllm", action=argparse.BooleanOptionalAction, default=env_bool("DEMO_MANAGE_VLLM", True),
+                        help="需要 vLLM 时自动启动/清理本机引擎；已有服务用 --no-manage-vllm")
     parser.add_argument("--model-dir", type=Path, default=Path(os.getenv("DEMO_MODEL_DIR", str(PROJECT_DIR / "ckpts/seamless-m4t-v2-large"))))
     parser.add_argument("--host", default=os.getenv("DEMO_HOST", "0.0.0.0"))
     parser.add_argument("--port", type=int, default=int(os.getenv("DEMO_PORT", "7860")))
@@ -434,6 +545,8 @@ def parse_args(argv=None):
     )
     parser.add_argument("--startup-timeout", type=int, default=int(os.getenv("DEMO_STARTUP_TIMEOUT", "90")))
     args = parser.parse_args(argv)
+    if args.mt_backend not in {"seamless", "hy-mt2", "hy-mt2-vllm"} or args.file_translation not in {"text", "speech"}:
+        parser.error("无效的文本翻译后端或文件翻译方式。")
     if args.lid_backend not in BACKENDS:
         parser.error("语言检测模块必须为 mms 或 speechbrain。")
     if args.lid_precision not in {"float16", "bfloat16", "float32"}:
@@ -453,6 +566,20 @@ def parse_args(argv=None):
     return args
 
 
+@contextmanager
+def termination_signals():
+    """Let Slurm SIGTERM unwind startup/inference and stop owned engine workers."""
+    def stop(signum, frame):
+        raise SystemExit(128 + signum)
+
+    previous = {sig: signal.signal(sig, stop) for sig in (signal.SIGTERM, signal.SIGINT)}
+    try:
+        yield
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+
+
 def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     args = parse_args()
@@ -466,32 +593,70 @@ def main():
     username, password = os.getenv("DEMO_AUTH_USER"), os.getenv("DEMO_AUTH_PASSWORD")
     if bool(username) != bool(password):
         raise RuntimeError("DEMO_AUTH_USER 和 DEMO_AUTH_PASSWORD 必须同时设置。")
-    if args.demo_mode:
-        from demo_mode import DemoTranslator
+    from realtime.integration import InferenceCoordinator
+    from realtime.translation import create_text_translator, translation_options
+    from realtime import create_service
+    from realtime.api import create_api, require_gradio_login
+    from realtime.engine import ManagedVLLM
 
-        LOGGER.warning("演示模式：不加载模型，仅为内置示例返回数据集参考文本。")
-        translator = DemoTranslator(SAMPLE_DIR, args.max_seconds, LANGUAGE_NAMES, LANGUAGE_CODES, AUTO_LANGUAGE, read_audio)
-    else:
-        translator = SpeechTranslator(
-            args.model_dir.resolve(), args.precision, args.max_seconds, args.max_new_tokens,
-            args.lid_model_dir, args.lid_max_seconds, args.lid_min_confidence,
-            args.lid_backend, args.lid_precision,
-        )
-    demo = build_demo(translator, demo_mode=args.demo_mode)
-    try:
-        if not args.demo_mode:
+    # Start the engine before loading ASR/LID/Seamless, as in the tested vLLM path.
+    with termination_signals(), ExitStack() as resources:
+        needs_mt = args.realtime or args.file_translation == "text"
+        text_translator = create_text_translator(**translation_options(args), require_slurm=False) if needs_mt else None
+        engine = None
+        if needs_mt and args.mt_backend == "hy-mt2-vllm" and args.manage_vllm and not args.demo_mode:
+            engine = resources.enter_context(ManagedVLLM(text_translator, demo_port=args.port))
+        service = None
+        if args.realtime:
+            service = create_service(mock=args.demo_mode, pipeline="cascade", text_translator=text_translator,
+                                     require_slurm=False)
+            resources.callback(service.close)
+            text_translator = service.translator
+        elif text_translator is not None and not args.demo_mode:
+            text_translator.load()
+        file_asr = service.asr if service is not None else None
+        if text_translator is not None and file_asr is None and not args.demo_mode:
+            from realtime.backend import NemotronASR
+            file_asr = NemotronASR(os.getenv("REALTIME_ASR_MODEL_DIR"),
+                os.getenv("REALTIME_ASR_PRECISION", "float32"), int(os.getenv("REALTIME_ASR_LOOKAHEAD", "3")))
+            file_asr.load()
+        coordinator = InferenceCoordinator(service)
+        if args.demo_mode:
+            from demo_mode import DemoTranslator
+            LOGGER.warning("演示模式：文件页仅预览样本/参考文本；实时页使用明确标注的 MOCK 输出。")
+            translator = DemoTranslator(SAMPLE_DIR, args.max_seconds, LANGUAGE_NAMES, LANGUAGE_CODES, AUTO_LANGUAGE, read_audio)
+            translator.default_translation_mode = args.file_translation
+        else:
+            translator = SpeechTranslator(
+                args.model_dir.resolve(), args.precision, args.max_seconds, args.max_new_tokens,
+                args.lid_model_dir, args.lid_max_seconds, args.lid_min_confidence,
+                args.lid_backend, args.lid_precision, text_translator=text_translator,
+                coordinator=coordinator, default_translation_mode=args.file_translation,
+                file_asr=file_asr,
+            )
             LOGGER.info("语言检测模块：%s", translator.language_detector.display_name)
             translator.language_detector.load_model()
             translator.load_model()
+        demo = build_demo(translator, demo_mode=args.demo_mode, realtime_enabled=args.realtime)
+        resources.callback(demo.close)
+        app_kwargs = {}
+        if service is not None:
+            api = create_api(service, LANGUAGES, start_session=coordinator.start_session,
+                             authorize=require_gradio_login)
+            # Register routes during Gradio's App construction so launch/share/
+            # root_path/auth keep their existing behavior and use a single port.
+            app_kwargs = {"routes": api.router.routes, "lifespan": api.router.lifespan_context}
         print("正在启动界面，请等待公网入口打印 PUBLIC_URL；本地监听地址不能用于公网访问。", flush=True)
         with startup_deadline(args.startup_timeout):
             demo.launch(
                 server_name=args.host, server_port=args.port, share=args.share,
                 root_path=args.root_path or None, auth=(username, password) if username else None,
                 allowed_paths=[example[0] for example in EXAMPLES if Path(example[0]).is_file()],
-                blocked_paths=[str(args.model_dir.resolve()), str(args.lid_model_dir.resolve()), str(PROJECT_DIR / "ckpts"), str(PROJECT_DIR / "outs")],
+                blocked_paths=[str(args.model_dir.resolve()), str(args.lid_model_dir.resolve()),
+                    str(PROJECT_DIR / "ckpts"), str(PROJECT_DIR / "outs"), str(PROJECT_DIR / ".env.local"),
+                    *([str(text_translator.model_dir.resolve())] if hasattr(text_translator, "model_dir") else [])],
                 max_file_size="25mb", show_error=False, inbrowser=False,
-                **launch_styling(), prevent_thread_lock=True,
+                **launch_styling(args.realtime), prevent_thread_lock=True, app_kwargs=app_kwargs,
             )
         if args.share and not demo.share_url:
             raise RuntimeError("公网分享链接创建失败，请检查计算节点的出站网络，或使用 README 中的固定域名方案。")
@@ -503,9 +668,10 @@ def main():
                 print("计算节点服务已就绪，请等待登录节点中转进程打印 PUBLIC_URL。", flush=True)
             else:
                 print("当前使用外部反向代理模式，请访问你配置的公网 HTTPS 域名。", flush=True)
-        demo.block_thread()
-    finally:
-        demo.close()
+        while demo.is_running:
+            if engine is not None:
+                engine.check()
+            time.sleep(.25)
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 """Demo mode: reviews the UI without GPU or weights, using dataset reference text only.
 
-Nothing here runs a model. Results come from data/test_samples/references.csv for the
-bundled samples, and the UI labels every result as reference text, not model output.
+Nothing here runs a model. Legacy uploads can return references.csv text; showcase
+clips only preview audio because they have no aligned reference transcripts.
 """
 
 from __future__ import annotations
@@ -9,6 +9,7 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 import time
+from sample_catalog import load_demo_samples
 
 import gradio as gr
 import numpy as np
@@ -36,12 +37,19 @@ def load_references(sample_dir: Path) -> dict[str, dict[str, str]]:
 
 
 class DemoTranslator:
-    """Same translate() contract as SpeechTranslator, backed by reference text."""
+    """Same translate() contract as SpeechTranslator, backed by reference text or an explicit audio-only preview."""
 
     def __init__(self, sample_dir: Path, max_seconds: float, language_names: dict[str, str],
                  language_codes: set[str], auto_language: str, read_audio):
         self.max_seconds = max_seconds
         self.references = load_references(sample_dir)
+        # Showcase clips have no aligned ground truth. Preview their audio without
+        # inventing ASR/translation results; legacy references remain usable on upload.
+        for sample in load_demo_samples(sample_dir):
+            self.references[sample["file"]] = {
+                "src": sample["source_lang"], "tgt": sample["target_lang"],
+                "source_text": "", "translation": "", "preview_only": True,
+            }
         self.language_names = language_names
         self.language_codes = language_codes
         self.auto_language = auto_language
@@ -67,14 +75,20 @@ class DemoTranslator:
                 return self.references[name]
         return None
 
-    def translate(self, audio_path: str | None, src_lang: str, tgt_lang: str):
+    def translate(self, audio_path: str | None, src_lang: str, tgt_lang: str, translation_mode=None):
         if src_lang not in self.language_codes | {self.auto_language} or tgt_lang not in self.language_codes:
             raise gr.Error("请选择有效的输入语言和输出语言。")
         started = time.monotonic()
         audio, sample_rate = self.read_audio(audio_path, self.max_seconds)
         reference = self.match_sample(audio, sample_rate)
         if reference is None:
-            raise gr.Error("演示模式不运行模型，只为内置示例提供数据集参考文本。请点击下方示例，或在 GPU 环境中运行完整模型。")
+            raise gr.Error("演示模式不运行模型，可预览内置音频；请在 GPU 环境运行真实识别与翻译。")
+        if reference.get("preview_only"):
+            source = reference["src"] if src_lang == self.auto_language else src_lang
+            yield "", "", f"演示模式：标注输入语言 · {self.language_names[source]}", (
+                f"完成 · 演示模式音频预览 · {len(audio) / sample_rate:.1f} 秒 · "
+                "未运行识别或翻译；此样本没有参考文本，请通过 GPU 作业查看模型结果。")
+            return
         if tgt_lang != reference["tgt"]:
             raise gr.Error(
                 f"演示模式只有该示例的{self.language_names[reference['tgt']]}参考译文，"

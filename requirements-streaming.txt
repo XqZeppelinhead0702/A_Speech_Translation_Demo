@@ -1,0 +1,11 @@
+# Native streaming ASR front end, required by the default production realtime tab.
+# Install alongside requirements.txt; legacy file-only mode may omit this file.
+# Does not replace torch/torchaudio or add NeMo/fairseq2.
+librosa==0.11.0
+soxr==1.1.0
+# Uvicorn duplex browser transport (pure Python; existing h11 is sufficient).
+wsproto==1.3.2
+# Direct dependencies of the shared HTTP/WebSocket API (also used by Gradio).
+fastapi==0.142.2
+uvicorn==0.54.0
+# Default vLLM deployment includes both files via requirements-vllm.txt.

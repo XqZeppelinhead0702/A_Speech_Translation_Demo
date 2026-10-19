@@ -1,0 +1,8 @@
+# Complete default two-page Demo, using the validated vLLM engine generation.
+# Install a compatible CUDA torch/torchaudio build first (docs/environment.md).
+# This is a reproducible starting point, not a claim about minimum versions.
+-r requirements.txt
+-r requirements-streaming.txt
+torch==2.8.0
+torchaudio==2.8.0
+vllm==0.10.2

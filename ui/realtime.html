@@ -1,0 +1,37 @@
+<section id="rt-test" data-api-base="__REALTIME_API_BASE__">
+  <div class="rt-heading"><span class="rt-tag" id="rt-pipeline">实时模式</span><h1>边说，边译。</h1>
+    <p>持续讲话，原文先更新，译文跟进。当前译文可随上下文修订；不按固定时长切断句子。</p></div>
+  <div class="rt-settings">
+    <label>输入语言（手动）<select id="rt-source"><option value="cmn">中文（普通话）</option><option value="eng">英语</option><option value="fra">法语</option></select></label>
+    <label>输出语言<select id="rt-target"><option value="eng">英语</option><option value="cmn">中文（普通话）</option><option value="fra">法语</option></select></label>
+  </div>
+  <div class="rt-endpoint-settings">
+    <label class="rt-auto-stop"><input id="rt-auto-stop" type="checkbox" checked>讲话后静音自动结束录音</label>
+    <label class="rt-endpoint-delay">静音等待<select id="rt-endpoint-delay" aria-label="自动停止录音前的静音等待时间"><option value="1.5">1.5 秒</option><option value="2.5" selected>2.5 秒</option><option value="4">4 秒</option></select></label>
+    <span>仅用于麦克风；短暂停顿继续识别，结束后补齐最终译文。</span>
+  </div>
+  <div class="rt-actions"><button id="rt-start">开始录音</button><button id="rt-stop" disabled>停止并等待最终结果</button><button id="rt-cancel" disabled>取消</button></div>
+  <p id="rt-status" role="status">正在初始化…</p><p id="rt-stats">麦克风需要 HTTPS 与浏览器授权。最多 120 秒，同时一个会话。</p>
+  <details class="rt-diagnostics"><summary>延迟诊断（停止原因与分阶段计时）</summary>
+    <label>传输方式<select id="rt-transport"><option value="auto">自动：优先长连接，失败回退 HTTP</option><option value="http">HTTP：用于比较网络传输影响</option></select></label>
+    <label>样本播放节奏<select id="rt-playback-mode"><option value="realtime">实时播放：不等待字幕（默认）</option><option value="adaptive">网络适配：上传积压时暂停</option></select></label>
+    <pre id="rt-diagnostics">开始测试后显示分阶段计时。</pre>
+  </details>
+  <div class="rt-results"><section><h2>会话原文 <small id="rt-asr-version"></small></h2><div id="rt-transcript" aria-live="polite"></div></section>
+    <section><h2>会话译文（可修订） <small id="rt-mt-version"></small></h2>
+    <div id="rt-translation" aria-live="polite"></div><p id="rt-sync" role="status"></p>
+    <details><summary>当前字幕对应的原文</summary><p id="rt-mt-source"></p></details>
+    <details class="rt-raw-generation"><summary>模型生成过程（调试）</summary>
+    <div id="rt-live-translation" hidden><small id="rt-draft-version"></small><div id="rt-translation-draft"></div><p id="rt-draft-source"></p></div>
+    <small>完整输出：</small><div id="rt-completed-translation"></div></details></section></div>
+  <div class="rt-samples"><label>不用麦克风也能测试<select id="rt-sample"><option>正在加载示例…</option></select></label><button id="rt-replay">播放并实时测试示例</button></div>
+  <div class="rt-playback" id="rt-playback" hidden>
+    <progress id="rt-playback-progress" value="0" max="1" aria-label="测试音频播放进度"></progress>
+    <span id="rt-playback-time">0.0 / 0.0 秒</span>
+    <label>播放音量<input id="rt-volume" type="range" min="0" max="1" step="0.05" value="0.8"></label>
+    <label class="rt-mute"><input id="rt-mute" type="checkbox">静音</label>
+  </div>
+  <p class="rt-foot">提供 10 条约 15–27 秒的多语言真人朗读。默认按真实时钟播放，原文与译文分别跟进，不为等待字幕暂停。慢网络可在诊断中选择网络适配模式，只按上传积压暂缓。音量和静音只影响声音。可用“停止”等待最终结果，或用“取消”结束测试。</p>
+  <details class="rt-history"><summary>更新记录（最近 200 条，展开查看识别与翻译的更新过程）</summary><ol id="rt-history"></ol></details>
+  <p class="rt-foot">音频连续输入，ASR 缓存保持。当前译文根据累计原文生成，尚未按语义块锁定前文；标点、停顿和停止时保留翻译检查点。停止后请等待“处理完成”。</p>
+</section>

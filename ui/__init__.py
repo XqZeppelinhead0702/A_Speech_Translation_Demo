@@ -99,11 +99,36 @@ def load_css() -> str:
     return (UI_DIR / "style.css").read_text(encoding="utf-8")
 
 
+def realtime_html(api_base: str = "realtime-api/") -> str:
+    return (UI_DIR / "realtime.html").read_text(encoding="utf-8").replace(
+        "__REALTIME_API_BASE__", escape(api_base, quote=True))
+
+
+def realtime_css() -> str:
+    return (UI_DIR / "realtime.css").read_text(encoding="utf-8")
+
+
+def realtime_js() -> str:
+    return (UI_DIR / "realtime.js").read_text(encoding="utf-8").replace(
+        "/* AUDIO_TRANSPORT */", (UI_DIR / "audio_transport.js").read_text(encoding="utf-8")).replace(
+        "/* ENDPOINT_DETECTOR */", (UI_DIR / "endpoint_detector.js").read_text(encoding="utf-8"))
+
+
 def load_js() -> str:
     script = (UI_DIR / "app.js").read_text(encoding="utf-8")
-    return (script.replace("__ST_STATES__", json.dumps(UI_STATES, ensure_ascii=False))
+    return (script.replace("/* FILE_PLAYBACK */", (UI_DIR / "file_playback.js").read_text(encoding="utf-8"))
+            .replace("__ST_STATES__", json.dumps(UI_STATES, ensure_ascii=False))
             .replace("__ST_COPY__", json.dumps(STATUS_COPY, ensure_ascii=False))
             .replace("__ST_STAGES__", json.dumps(STAGE_COPY, ensure_ascii=False)))
+
+
+# Independent of gr.Audio: disabling the upload widget during inference can
+# replace its media element. Keep audible playback and controls alive throughout.
+PLAYBACK_HTML = """<div id="st-file-playback" hidden>
+  <div class="st-playback-caption"><span id="st-playback-note" role="status">输入音频试听</span>
+    <button id="st-playback-stop" type="button" aria-label="停止试听">停止试听</button></div>
+  <audio id="st-playback-audio" controls preload="none" aria-label="输入音频试听"></audio>
+</div>"""
 
 
 # Monochrome mark: one continuous line that leaves the baseline as a voice and returns.
@@ -116,7 +141,7 @@ MARK_SVG = """<svg class="st-mark" viewBox="0 0 20 20" aria-hidden="true">
 
 def topbar_html(engine_label: str, demo_mode: bool) -> str:
     badge = (
-        '<span class="st-tag" title="不运行模型，只返回内置示例的数据集参考文本">演示模式</span>'
+        '<span class="st-tag" title="不运行模型，新展示样本仅预览音频">演示模式</span>'
         if demo_mode else
         f'<span class="st-engine" title="模型已在服务器本地加载"><i aria-hidden="true"></i>{escape(engine_label)}</span>'
     )
@@ -128,7 +153,7 @@ def topbar_html(engine_label: str, demo_mode: bool) -> str:
 
 def hero_html(language_count: int, demo_mode: bool) -> str:
     notice = (
-        '<p class="st-demo-note"><span class="st-tag">演示模式</span>未加载模型。内置示例返回 CoVoST 2 数据集的参考文本，并非模型输出。</p>'
+        '<p class="st-demo-note"><span class="st-tag">演示模式</span>未加载模型。可播放内置音频预览界面；真实识别与翻译需启动 GPU 服务。</p>'
         if demo_mode else ""
     )
     return f"""<section class="st-hero">
@@ -156,19 +181,6 @@ def hint_html(max_seconds: float) -> str:
 def section_head_html(title: str, note: str = "") -> str:
     note_html = f'<span class="st-section-note">{escape(note)}</span>' if note else ""
     return f'<div class="st-section-head"><h2>{escape(title)}</h2>{note_html}</div>'
-
-
-INTERPRET_HTML = """<section class="st-soon">
-  <span class="st-tag">即将推出</span>
-  <h1>同声传译</h1>
-  <p class="st-lede">边说边译。说话的同时持续输出双语字幕，适合会议、访谈与跨语言交流。</p>
-  <ol class="st-soon-grid">
-    <li><span class="st-soon-num">01</span><h3>流式识别</h3><p>语音分段送入模型，字幕随说话实时出现。</p></li>
-    <li><span class="st-soon-num">02</span><h3>双语对照</h3><p>原文与译文逐句对齐，回看与复制都很方便。</p></li>
-    <li><span class="st-soon-num">03</span><h3>共享语言与模型</h3><p>沿用当前 21 种语言和本地部署方式。</p></li>
-  </ol>
-  <p class="st-soon-foot">该功能仍在规划中，当前版本不提供实时传译。</p>
-</section>"""
 
 
 def footer_html(engine_label: str) -> str:

@@ -158,20 +158,23 @@ body gradio-app .gradio-container .main.app { padding: 0 !important; }
 .st-engine { display: inline-flex; align-items: center; gap: 8px; height: 24px; padding: 0 10px; border-radius: 999px; background: var(--st-accent-soft); font-size: 12px; color: var(--st-accent-ink); white-space: nowrap; }
 .st-engine i { width: 6px; height: 6px; border-radius: 50%; background: var(--st-accent); }
 
-/* Product navigation sits in the top bar, centred. */
+/* Two always-visible mode buttons below the brand/model bar. */
 #st-tabs { position: static; background: transparent; border: 0; padding: 0; gap: 0; }
 #st-tabs > .tab-wrapper {
-  position: absolute; top: 15px; left: 50%; transform: translateX(-50%); z-index: 5;
-  height: auto; padding: 0; border: 0; background: transparent;
+  position: relative; display: flex; justify-content: flex-start; width: 100%;
+  height: auto; margin: 8px 0 0; padding: 0; border: 0; background: transparent;
+  flex: 0 0 auto; min-width: 0; overflow: visible;
 }
 #st-tabs [role="tablist"] {
-  display: inline-flex; gap: 2px; padding: 3px; border: 0 !important; border-radius: 999px;
+  display: inline-flex; flex: 0 0 auto; flex-wrap: wrap; gap: 4px; padding: 4px;
+  width: fit-content !important; max-width: 100%; border: 0 !important; border-radius: 999px;
   background: color-mix(in oklch, var(--st-sunken) 70%, transparent);
 }
 #st-tabs .tab-container, #st-tabs .tab-wrapper button { border-bottom: 0 !important; }
 #st-tabs .tab-container::after { display: none !important; }
 #st-tabs [role="tab"] {
-  height: 28px; padding: 0 14px; margin: 0; border: 0 !important; border-radius: 999px;
+  flex: 0 0 auto; white-space: nowrap;
+  height: 34px; padding: 0 20px; margin: 0; border: 0 !important; border-radius: 999px;
   font-size: 13px; font-weight: 500; color: var(--st-ink-3); background: transparent;
   transition: color var(--st-fast) ease, background var(--st-base) var(--st-ease-out), box-shadow var(--st-base) var(--st-ease-out);
 }
@@ -179,9 +182,6 @@ body gradio-app .gradio-container .main.app { padding: 0 !important; }
 #st-tabs [role="tab"]:hover { color: var(--st-ink-2); }
 #st-tabs [role="tab"].selected { color: var(--st-ink); background: var(--st-surface); box-shadow: var(--st-raise-sm), var(--st-highlight); }
 #st-tabs [data-tab-id="interpret"] { display: inline-flex; align-items: center; gap: 6px; }
-#st-tabs [data-tab-id="interpret"]::before {
-  content: "Soon"; order: 2; font: 500 10px/1 var(--st-sans); letter-spacing: 0.02em; color: var(--st-accent-ink); opacity: 0.8;
-}
 #st-tabs .tabitem { padding: 0 !important; border: 0 !important; background: transparent !important; }
 
 /* ---- Hero ------------------------------------------------------------------- */
@@ -304,12 +304,29 @@ body gradio-app .gradio-container .main.app { padding: 0 !important; }
 /* Probes app.js reads to paint the canvas with the same tokens as the page. */
 .st-wave i { position: absolute; width: 0; height: 0; overflow: hidden; }
 
+/* Model selector: one quiet, full-width field using the same palette as languages. */
+#st-translation-mode {padding:12px 14px !important;border:1px solid var(--st-line) !important;border-radius:var(--st-radius-md) !important;background:var(--st-surface) !important;overflow:visible !important;gap:6px}
+#st-translation-mode > label {font-size:12px !important;color:var(--st-ink-3) !important;margin-bottom:4px}
+#st-translation-mode .wrap {min-height:40px;border:1px solid var(--st-line-strong) !important;border-radius:9px !important;background:var(--st-sunken) !important;box-shadow:none !important;transition:border-color var(--st-fast) ease,box-shadow var(--st-fast) ease}
+#st-translation-mode .wrap:focus-within {border-color:var(--st-accent) !important;box-shadow:0 0 0 2px var(--st-accent-faint) !important}
+#st-translation-mode .wrap-inner {padding:0 12px !important}
+#st-translation-mode input {font-size:14px !important;font-weight:500;color:var(--st-ink) !important;cursor:pointer;min-width:0;text-overflow:ellipsis}
+#st-translation-mode .icon-wrap {color:var(--st-ink-3) !important}
+#st-translation-mode .info {font-size:11px !important;line-height:1.6 !important;color:var(--st-ink-3) !important}
+#st-translation-mode:has(input:disabled) {opacity:.6}
+
 /* Audio input: a raised well on the stage */
 #st-audio {
   border-radius: var(--st-radius-md) !important; border: 0 !important; background: var(--st-surface) !important;
   box-shadow: var(--st-raise-sm), var(--st-highlight); overflow: hidden; min-height: 0 !important;
   transition: box-shadow var(--st-fast) ease;
 }
+#st-file-playback[hidden] {display:none !important}
+#st-file-playback {padding:10px 12px;background:var(--st-surface);border:1px solid var(--st-line);border-radius:var(--st-radius-md)}
+.st-playback-caption {display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:6px;color:var(--st-ink-3);font-size:11px;line-height:1.6}
+#st-playback-stop {flex-shrink:0;background:transparent;border:0;color:var(--st-accent-ink);font:inherit;cursor:pointer;padding:4px}
+#st-playback-stop:focus-visible {outline:2px solid var(--st-accent);border-radius:4px}
+#st-playback-audio {display:block;width:100%;height:34px}
 #st-audio:hover { box-shadow: 0 0 0 1px var(--st-line-strong), var(--st-highlight); }
 #st-audio .upload-container, #st-audio button.center { min-height: 0 !important; height: auto !important; }
 #st-audio .upload-container > .wrap { min-height: 108px !important; height: 108px !important; line-height: 1.4; gap: 0 !important; }
@@ -483,25 +500,6 @@ textarea.st-revealing { color: transparent !important; -webkit-text-fill-color: 
 .st-example:active:not(:disabled) { transform: scale(0.98); transition-duration: 90ms; }
 .st-example:disabled { opacity: 0.5; }
 
-/* ---- Coming soon (Simultaneous interpretation) ----------------------------- */
-.st-soon .st-tag { margin-bottom: 20px; }
-.st-soon h1 { color: var(--st-ink) !important; }
-.st-soon-grid {
-  display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; max-width: 960px;
-  margin: 44px 0 0 !important; padding: 0 !important; list-style: none; counter-reset: none;
-}
-.st-soon-grid li {
-  margin: 0 !important; padding: 22px !important; border-radius: var(--st-radius-lg);
-  background: var(--st-surface); box-shadow: var(--st-raise-sm), var(--st-highlight);
-}
-.st-soon-grid li:first-child { background: linear-gradient(180deg, var(--st-stage), var(--st-stage-2)); }
-.st-soon-grid li::before, .st-soon-grid li::marker { display: none !important; content: none !important; }
-.st-soon-num { font: 500 12px/1 var(--st-mono); color: var(--st-accent-ink); }
-.st-soon-grid h3 { margin: 16px 0 6px !important; font-size: 15px !important; font-weight: 600 !important; letter-spacing: -0.01em; color: var(--st-ink) !important; }
-.st-soon-grid p { margin: 0 !important; font-size: 14px !important; line-height: 1.6 !important; color: var(--st-ink-2) !important; }
-.st-soon-foot { margin: 32px 0 0 !important; font-size: 13px !important; color: var(--st-ink-3) !important; }
-#st-back { width: auto !important; max-width: max-content; min-width: 0 !important; padding: 0 20px !important; margin-top: 4px; }
-
 /* ---- Footer ----------------------------------------------------------------- */
 .st-footer {
   display: flex; flex-wrap: wrap; gap: 8px; margin-top: 64px; padding: 20px 0 8px;
@@ -538,8 +536,7 @@ textarea.st-revealing { color: transparent !important; -webkit-text-fill-color: 
 /* ---- Responsive -------------------------------------------------------------- */
 @media (max-width: 900px) {
   .st-topbar { height: 56px; }
-  #st-tabs > .tab-wrapper { position: static; transform: none; display: flex; margin: 0; width: auto; }
-  #st-tabs [role="tablist"] { width: auto !important; flex: 0 0 auto; }
+  #st-tabs > .tab-wrapper { width: 100%; }
   .st-hero, .st-soon { padding: 28px 0 24px; }
   #st-workspace { flex-direction: column !important; padding: 6px !important; gap: 6px !important; border-radius: 20px !important; }
   #st-input { padding: 14px !important; border-radius: 15px !important; }
@@ -549,7 +546,6 @@ textarea.st-revealing { color: transparent !important; -webkit-text-fill-color: 
   .st-hint-keys { display: none; }
   #st-actions > button { min-width: 0 !important; }
   #st-clear { flex: 0 0 88px !important; }
-  .st-soon-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 480px) {
   .st-brand span { font-size: 13px; }

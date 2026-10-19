@@ -13,7 +13,7 @@
 | MMS-LID-256 | `DEMO_LID_BACKEND=mms` | 与翻译模型相同的 GPU | `ckpts/mms-lid-256` | 20 种，含普通话和粤语 |
 | SpeechBrain VoxLingua107 | `DEMO_LID_BACKEND=speechbrain` | CPU | `ckpts/lang-id-voxlingua107-ecapa` | 19 种，粤语需手动选择 |
 
-仅在服务启动时加载所选检测模型，之后复用；切换模块需要重启作业，不在页面中切换。默认模式在一张 GPU 上常驻 MMS 与 SeamlessM4T 两个模型；选择 SpeechBrain 时不加载 MMS。
+仅在服务启动时加载所选检测模型，之后复用；切换模块需要重启作业，不在页面中切换。默认两页部署还会加载 Nemotron 和 Hy-MT2/vLLM，与 MMS、SeamlessM4T 共用 GPU；只保留文件端到端模式时才是 MMS + SeamlessM4T。选择 SpeechBrain 时不加载 MMS。实时页暂不自动检测语言，麦克风静音结束也不调用语言检测模型。
 
 ## 配置与启动
 

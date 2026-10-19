@@ -11,7 +11,49 @@
 3. 执行 `mkdir -p outs`，日志目录必须在提交前存在。
 4. 确认 GPU 分区、CPU/内存和时限；将下文 `GPU_PARTITION` 替换为实际分区。
 
-新脚本不写死集群模块、账号、分区或共享目录。默认申请一节点、一任务、一 GPU、4 个 CPU 和每节点 32 GB 主机内存；时限等参数以所在集群要求为准。
+新脚本不写死集群模块、账号、分区或共享目录。默认申请一节点、一任务、一 GPU、8 个 CPU 和每节点 64 GB 主机内存；时限等参数以所在集群要求为准。
+
+## 从旧的 serve_demo.sh 迁移
+
+旧的 `scripts/slurm/serve_demo.sh` 将特定集群的环境和网络设置写在脚本中；公开版本将环境配置移到 `.env.local`，按网络情况提供三个入口：
+
+| 旧脚本使用的方式 | 新入口 |
+| --- | --- |
+| 设置 `DEMO_RELAY_TARGET`，通过登录节点生成 Gradio 公网链接 | `scripts/slurm/serve_login_relay.sh` |
+| 不使用中转，计算节点自己生成 Gradio 公网链接 | `scripts/slurm/serve_direct.sh` |
+| 设置 `DEMO_TUNNEL_TARGET`，经公网服务器访问固定域名 | `scripts/slurm/serve_public_tunnel.sh` |
+
+如果旧脚本已通过登录节点中转成功运行，选择 `serve_login_relay.sh`。把原来的环境初始化与中转设置移入项目根目录的 `.env.local`，例如：
+
+```bash
+# 替换为旧脚本中实际使用的模块和路径；不需要模块时省略该项。
+DEMO_MODULES="ANACONDA_MODULE CUDA_MODULE GCC_MODULE"
+DEMO_CONDA_SH=/path/to/conda/etc/profile.d/conda.sh
+DEMO_CONDA_ENV=st_demo
+DEMO_FFMPEG_DIR=/path/to/ffmpeg/bin
+
+DEMO_RELAY_TARGET=YOUR_USER@LOGIN_HOST
+DEMO_RELAY_PORT=17860
+# 登录节点需要代理时填写；不需要则保持为空。
+DEMO_RELAY_PROXY_URL=
+
+DEMO_PORT=7860
+DEMO_LID_BACKEND=mms
+DEMO_LID_PRECISION=float32
+```
+
+登录节点的项目和 Python 默认使用计算节点上的相同路径；不同路径时设置 `DEMO_RELAY_PROJECT_DIR` 和 `DEMO_RELAY_PYTHON`。保留已经验证可用的 SSH 密钥与 `known_hosts`，无需因更换入口重新创建。其他语言检测配置可沿用 `.env.example` 的默认值。
+
+原来的 `#SBATCH --partition=...` 改为提交时指定，**分区不能通过 `.env.local` 设置**，因为 Slurm 在运行脚本、读取该文件之前就已完成资源分配：
+
+```bash
+mkdir -p outs
+sbatch --partition=GPU_PARTITION scripts/slurm/serve_login_relay.sh
+```
+
+不要同时提交旧入口和新入口来迁移同一个服务；它们可能争用相同的登录节点中转端口。先停止旧作业，再提交新作业。新日志位置为 `outs/demo-JOB_ID.out`、`outs/demo-JOB_ID.err`，不再使用旧脚本的固定 `outs/demo.out` / `outs/demo.err`。
+
+新入口会自动读取 `.env.local`；旧的 `serve_demo.sh` 不会自动读取该文件。应用及中转代码仍由两类入口共用，但配置来源不同。
 
 ## CPU 与内存资源
 
@@ -19,32 +61,13 @@
 
 ```bash
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=32G
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=64G
 ```
 
-默认 MMS-LID-256 与 SeamlessM4T 同时常驻第一张可见 GPU，检测和翻译按顺序执行，只申请一张 GPU；切回 SpeechBrain 时检测器常驻 CPU。加载权重、音频解码和网页服务也使用主机内存。32 GB 是整个服务的初始预算，不代表语言检测模型单独需要这么多。`--mem` 申请的是每节点的主机内存，GPU 显存由所分配 GPU 决定。[Slurm 资源参数说明](https://slurm.schedmd.com/sbatch.html)
+正式入口现在默认加载 Nemotron 流式 ASR、SeamlessM4T、MMS-LID-256，并在同一作业中启动一份 Hy-MT2/vLLM 服务；仍只申请一张 GPU。默认 64 GB 是整个服务的主机内存预算，GPU 显存由分配的 GPU 决定，不能通过增加 `--mem` 扩大显存。建议先用 A100 80 GB 验证整体运行；本次集成尚未测量四个模型的总显存峰值。
 
-选择 L20 48 GB 等大显存 GPU 时，按集群规则指定对应分区或 GPU 类型。MMS 默认 float32、SeamlessM4T 默认 float16；检测最多使用 10 秒片段。当前未运行双模型 GPU 推理测量峰值，实际显存还包含中间计算与缓存，需以 Slurm 作业运行结果为准。检测模块与精度调整见[自动语言检测](language_detection.md)。
-
-启动脚本默认将 `OMP_NUM_THREADS`、`MKL_NUM_THREADS` 设为分配的 CPU 数，避免 CPU 推理默认开启大量线程；如需更少线程，可在 `.env.local` 中设置这两个变量，值不要超过分配核数。单实例仍按队列依次推理。
-
-如果需要更多内存，可在提交时覆盖脚本默认值，例如登录节点中转模式：
-
-```bash
-sbatch --partition=GPU_PARTITION --mem=48G --cpus-per-task=4 scripts/slurm/serve_login_relay.sh
-```
-
-修改脚本不会改变正在运行的作业，需停止旧作业后重新提交。运行后可检查分配和实际内存峰值：
-
-```bash
-scontrol show job JOB_ID
-sstat -j JOB_ID.batch --format=JobID,MaxRSS,AveRSS
-# 已结束的作业：
-sacct -j JOB_ID --format=JobID,State,ReqMem,MaxRSS
-```
-
-`JOB_ID` 替换为作业号；实际统计取决于集群是否启用了相应作业记账。当前没有运行 GPU 服务测量整个 Demo 的内存峰值，后续可按实际峰值调整预算。
+原 Python、SSH、代理、中转参数继续使用，两页使用同一个公网 URL。启动先等待 vLLM，再加载其他模型，`scancel` 时清理托管引擎；首次验证、后端切换及原模式回退见[正式 Demo](formal_demo.md)。
 
 ## A. 计算节点可联网：直接分享
 
@@ -70,6 +93,8 @@ DEMO_RELAY_PROXY_URL=
 ```
 
 将 SSH 账号和目标替换为实际值。若登录节点需要代理，填写它使用的 HTTP 代理 URL。登录节点和计算节点通常共享 home/项目/Conda；若路径不同，再设置 `DEMO_RELAY_PROJECT_DIR`、`DEMO_RELAY_PYTHON`。
+
+如果 API 通过代理可用，但 FRPC 分享握手报 `EOF` / `session shutdown`，且分享服务器直连已验证可用，可保留 `DEMO_RELAY_PROXY_URL` 并显式添加 `DEMO_RELAY_FRPC_PROXY_URL=`，让 API 走代理、FRPC 直连。完整诊断见 [FRPC 握手排错](faq.md#frpc-报-login-to-server-failed-eof--session-shutdown)。
 
 ### 2. 准备免交互 SSH
 

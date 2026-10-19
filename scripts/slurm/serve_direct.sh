@@ -2,8 +2,8 @@
 #SBATCH --job-name=speech_demo
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=32G
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=64G
 #SBATCH --gres=gpu:1
 #SBATCH --output=outs/demo-%j.out
 #SBATCH --error=outs/demo-%j.err
